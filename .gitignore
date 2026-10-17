@@ -1,0 +1,140 @@
+# ==========================================
+# Remote-PC Project .gitignore
+# ==========================================
+
+# -----------------
+# Binaries & Installers (Uploaded to GitHub Releases ONLY)
+# -----------------
+*.apk
+*.ap_
+*.aab
+*.dex
+*.exe
+*.msi
+*.dll
+*.pyd
+*.so
+*.dylib
+*.iso
+*.dmg
+*.zip
+*.tar.gz
+*.7z
+Remote PC.apk
+Remote_PC_Setup.exe
+Remote_Server.exe
+Remote_GUI.exe
+Remote PC GUI.exe
+Output/
+Release/
+
+# -----------------
+# Android & Gradle
+# -----------------
+.gradle/
+*/.gradle/
+client/.gradle/
+build/
+*/build/
+client/app/build/
+captures/
+.externalNativeBuild/
+.cxx/
+output.json
+
+# Local configuration file (sdk path, etc)
+local.properties
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.iws
+*.ipr
+.idea_modules/
+
+# Signing files
+*.jks
+*.keystore
+
+# -----------------
+# Python & Virtual Envs
+# -----------------
+__pycache__/
+*/__pycache__/
+*/*/__pycache__/
+*.py[cod]
+*$py.class
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+.venv/
+server/.venv/
+
+# PyInstaller / Distribution
+dist/
+dist-electron/
+*.spec
+
+# -----------------
+# Node.js & Desktop GUI
+# -----------------
+node_modules/
+*/node_modules/
+desktop-gui/node_modules/
+desktop-gui/dist/
+desktop-gui/dist-electron/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# -----------------
+# Sensitive & Runtime Files
+# -----------------
+config.json
+server/config.json
+server/sent.py
+checksums.txt
+*.log
+Remote_Server.log
+server/Remote_Server.log
+.env
+.env.local
+*.env
+
+# -----------------
+# OS Generated Files
+# -----------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+[Dd]esktop.ini
+
+# -----------------
+# IDEs & Editors
+# -----------------
+.vscode/
+*.swp
+*.swo
+*~
+
+# -----------------
+# Temp, Extraction & Decompiled Files
+# -----------------
+scratch/
+.system_generated/
+Remote_Server.exe_extracted/
+client_decompiled/
+extracted_apk/
+pyinstxtractor.py
+res_decompiled_backup/
+*/res_decompiled_backup/
+java_decompiled_backup/
+*/java_decompiled_backup/
+.kotlin/
+*/.kotlin/
