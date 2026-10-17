@@ -134,7 +134,7 @@ def build_artifacts():
             sys.exit(res.returncode)
         print("✅ Windows Setup generated successfully!")
 
-def github_api_request(url: str, token: str, method: str = "GET", data: dict | bytes | None = None, content_type: str = "application/json") -> dict:
+def github_api_request(url: str, token: str, method: str = "GET", data: dict | bytes | None = None, content_type: str = "application/json", timeout: float = 600.0) -> dict:
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/vnd.github+json",
@@ -152,7 +152,7 @@ def github_api_request(url: str, token: str, method: str = "GET", data: dict | b
 
     req = urllib.request.Request(url, data=req_data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=120.0) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             resp_body = resp.read()
             if resp_body:
                 return json.loads(resp_body.decode("utf-8"))
