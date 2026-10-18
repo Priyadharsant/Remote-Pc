@@ -43,6 +43,10 @@ fun SettingsScreen(
     var updateInfo by remember { mutableStateOf<GithubReleaseInfo?>(null) }
     var isDownloadingUpdate by remember { mutableStateOf(false) }
     var updateDownloadProgress by remember { mutableFloatStateOf(0f) }
+    var updateDownloadSpeed by remember { mutableStateOf("") }
+    var updateDownloadStreams by remember { mutableIntStateOf(1) }
+    var updateDownloadTransferred by remember { mutableLongStateOf(0L) }
+    var updateDownloadTotal by remember { mutableLongStateOf(0L) }
     var showUpdateDialog by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
@@ -374,9 +378,10 @@ fun SettingsScreen(
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
+                        val installedVer = remember { AppUpdater.getAppVersion(context) }
                         Column {
                             Text("Remote PC Mobile", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = AppTheme.TextPrimary)
-                            Text("Current Version: ${AppUpdater.CURRENT_APP_VERSION}", fontSize = 11.sp, color = AppTheme.TextSecondary)
+                            Text("Current Version: $installedVer", fontSize = 11.sp, color = AppTheme.TextSecondary)
                         }
                         Surface(
                             shape = RoundedCornerShape(8.dp),
@@ -384,7 +389,7 @@ fun SettingsScreen(
                             border = BorderStroke(1.dp, AppTheme.AccentCyan.copy(alpha = 0.4f))
                         ) {
                             Text(
-                                "v${AppUpdater.CURRENT_APP_VERSION}",
+                                "v$installedVer",
                                 fontSize = 11.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = AppTheme.AccentCyan,
@@ -397,7 +402,8 @@ fun SettingsScreen(
                         onClick = {
                             isCheckingUpdate = true
                             scope.launch {
-                                val info = AppUpdater.checkUpdate()
+                                val appVer = AppUpdater.getAppVersion(context)
+                                val info = AppUpdater.checkUpdate(appVer)
                                 isCheckingUpdate = false
                                 if (info != null && info.hasUpdate) {
                                     updateInfo = info
@@ -526,11 +532,32 @@ fun SettingsScreen(
                                 color = AppTheme.AccentCyan,
                                 trackColor = AppTheme.CardDark
                             )
-                            Text(
-                                "Downloading: ${(updateDownloadProgress * 100).toInt()}%",
-                                fontSize = 11.sp,
-                                color = AppTheme.TextSecondary
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    "Downloading: ${(updateDownloadProgress * 100).toInt()}%${if (updateDownloadSpeed.isNotEmpty()) " · $updateDownloadSpeed" else ""}",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = AppTheme.AccentCyan
+                                )
+                                if (updateDownloadStreams > 1) {
+                                    Text(
+                                        "⚡ ${updateDownloadStreams} Multi-Streams",
+                                        fontSize = 10.sp,
+                                        color = AppTheme.TextSecondary
+                                    )
+                                }
+                            }
+                            if (updateDownloadTotal > 0L) {
+                                Text(
+                                    "${formatFileSize(updateDownloadTransferred)} / ${formatFileSize(updateDownloadTotal)}",
+                                    fontSize = 10.sp,
+                                    color = AppTheme.TextSecondary
+                                )
+                            }
                         }
                     }
                 },
@@ -542,7 +569,13 @@ fun SettingsScreen(
                                 AppUpdater.downloadAndInstallApk(
                                     context = context,
                                     apkUrl = info.apkUrl,
-                                    onProgress = { p -> updateDownloadProgress = p },
+                                    onProgress = { p, speed, streams, transferred, total ->
+                                        updateDownloadProgress = p
+                                        updateDownloadSpeed = speed
+                                        updateDownloadStreams = streams
+                                        updateDownloadTransferred = transferred
+                                        updateDownloadTotal = total
+                                    },
                                     onDownloaded = {
                                         isDownloadingUpdate = false
                                         showUpdateDialog = false

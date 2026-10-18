@@ -63,17 +63,28 @@ function computeSha256(filePath) {
   return hash.digest("hex");
 }
 
+const uploadAgent = new https.Agent({
+  keepAlive: true,
+  maxSockets: 8,
+  maxFreeSockets: 4,
+  timeout: 60000,
+});
+
 function uploadFileStream(uploadUrl, filePath, contentType, token) {
   return new Promise((resolve, reject) => {
     const fileStats = fs.statSync(filePath);
     const totalBytes = fileStats.size;
     const urlObj = new URL(uploadUrl);
+    const baseName = path.basename(filePath);
+    const startTime = Date.now();
+    let lastReportTime = 0;
 
     const options = {
       hostname: urlObj.hostname,
       port: 443,
       path: urlObj.pathname + urlObj.search,
       method: "POST",
+      agent: uploadAgent,
       headers: {
         Authorization: `token ${token}`,
         "Content-Type": contentType,
@@ -103,6 +114,12 @@ function uploadFileStream(uploadUrl, filePath, contentType, token) {
       });
     });
 
+    req.on("socket", (socket) => {
+      try {
+        socket.setNoDelay(true);
+      } catch (_) {}
+    });
+
     req.on("error", (err) => reject(err));
     req.on("timeout", () => {
       req.destroy();
@@ -112,22 +129,26 @@ function uploadFileStream(uploadUrl, filePath, contentType, token) {
     let uploadedBytes = 0;
     let lastPercent = -1;
     const stream = fs.createReadStream(filePath, {
-      highWaterMark: 1024 * 1024,
+      highWaterMark: 4 * 1024 * 1024, // 4MB high-performance buffer
     });
 
     stream.on("data", (chunk) => {
       uploadedBytes += chunk.length;
       const pct = Math.round((uploadedBytes / totalBytes) * 100);
-      if (pct !== lastPercent && pct % 1 === 0) {
+      const now = Date.now();
+      if ((pct !== lastPercent && pct % 2 === 0) || now - lastReportTime > 250 || pct === 100) {
         lastPercent = pct;
+        lastReportTime = now;
+        const elapsedSec = (now - startTime) / 1000 || 0.001;
+        const mbps = (uploadedBytes / (1024 * 1024) / elapsedSec).toFixed(1);
         process.stdout.write(
-          `  ⏳ ${pct}% (${(uploadedBytes / (1024 * 1024)).toFixed(1)} / ${(totalBytes / (1024 * 1024)).toFixed(1)} MB)\r`
+          `  ⏳ [${baseName}] ${pct}% (${(uploadedBytes / (1024 * 1024)).toFixed(1)} / ${(totalBytes / (1024 * 1024)).toFixed(1)} MB) · ⚡ ${mbps} MB/s\r`
         );
       }
     });
 
     stream.on("end", () => {
-      console.log(`\n  ✓ Stream finished, awaiting server confirmation...`);
+      console.log(`\n  ✓ [${baseName}] Stream finished, awaiting server confirmation...`);
     });
 
     stream.on("error", (err) => {
@@ -306,55 +327,53 @@ async function main() {
     }
   }
 
-  // 4. Upload each asset to uploads.github.com using streaming
-  for (const item of filesToUpload) {
-    const fileStats = fs.statSync(item.localPath);
-    console.log(
-      `\nUploading ${item.name} (${(fileStats.size / (1024 * 1024)).toFixed(1)} MB)...`
-    );
-
-    const uploadUrl = `https://uploads.github.com/repos/${OWNER}/${REPO}/releases/${release.id}/assets?name=${encodeURIComponent(item.name)}`;
-    try {
-      const uploadedAsset = await uploadFileStream(
-        uploadUrl,
-        item.localPath,
-        item.contentType,
-        token
-      );
-      console.log(
-        `✓ Uploaded ${item.name} (Download: ${uploadedAsset.browser_download_url || "Done"})`
-      );
-    } catch (uploadErr) {
-      if (uploadErr.message && uploadErr.message.includes("already_exists")) {
-        console.log(`Asset ${item.name} already exists. Fetching asset list to remove and retry...`);
-        const assetsList = await fetch(
-          `https://api.github.com/repos/${OWNER}/${REPO}/releases/${release.id}/assets`,
-          { headers }
-        ).then((r) => r.json());
-        const existing = (Array.isArray(assetsList) ? assetsList : []).find(
-          (a) => normalizeName(a.name) === normalizeName(item.name)
+  // 4. Upload all assets in parallel using high-speed streaming
+  console.log(`\n🚀 Uploading ${filesToUpload.length} release assets in parallel...`);
+  await Promise.all(
+    filesToUpload.map(async (item) => {
+      const fileStats = fs.statSync(item.localPath);
+      const uploadUrl = `https://uploads.github.com/repos/${OWNER}/${REPO}/releases/${release.id}/assets?name=${encodeURIComponent(item.name)}`;
+      try {
+        const uploadedAsset = await uploadFileStream(
+          uploadUrl,
+          item.localPath,
+          item.contentType,
+          token
         );
-        if (existing) {
-          await fetch(
-            `https://api.github.com/repos/${OWNER}/${REPO}/releases/assets/${existing.id}`,
-            { method: "DELETE", headers }
+        console.log(
+          `\n✓ [${item.name}] Uploaded successfully (${(fileStats.size / (1024 * 1024)).toFixed(1)} MB)`
+        );
+        return uploadedAsset;
+      } catch (uploadErr) {
+        if (uploadErr.message && uploadErr.message.includes("already_exists")) {
+          const assetsList = await fetch(
+            `https://api.github.com/repos/${OWNER}/${REPO}/releases/${release.id}/assets`,
+            { headers }
+          ).then((r) => r.json());
+          const existing = (Array.isArray(assetsList) ? assetsList : []).find(
+            (a) => normalizeName(a.name) === normalizeName(item.name)
           );
-          console.log(`✓ Removed existing asset ${existing.name}. Retrying upload...`);
-          const uploadedAsset = await uploadFileStream(
-            uploadUrl,
-            item.localPath,
-            item.contentType,
-            token
-          );
-          console.log(
-            `✓ Uploaded ${item.name} (Download: ${uploadedAsset.browser_download_url || "Done"})`
-          );
-          continue;
+          if (existing) {
+            await fetch(
+              `https://api.github.com/repos/${OWNER}/${REPO}/releases/assets/${existing.id}`,
+              { method: "DELETE", headers }
+            );
+            const uploadedAsset = await uploadFileStream(
+              uploadUrl,
+              item.localPath,
+              item.contentType,
+              token
+            );
+            console.log(
+              `\n✓ [${item.name}] Uploaded successfully (${(fileStats.size / (1024 * 1024)).toFixed(1)} MB)`
+            );
+            return uploadedAsset;
+          }
         }
+        throw uploadErr;
       }
-      throw uploadErr;
-    }
-  }
+    })
+  );
 
   console.log(`\n========================================================`);
   console.log(`🎉 Successfully published and uploaded Remote PC ${tag}!`);

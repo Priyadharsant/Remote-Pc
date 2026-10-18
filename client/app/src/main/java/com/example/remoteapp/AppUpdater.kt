@@ -3,10 +3,11 @@ package com.example.remoteapp
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
-import android.os.Environment
 import android.util.Log
 import androidx.core.content.FileProvider
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -14,7 +15,10 @@ import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.RandomAccessFile
+import java.util.Locale
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 data class GithubReleaseInfo(
     val hasUpdate: Boolean,
@@ -30,12 +34,24 @@ data class GithubReleaseInfo(
 object AppUpdater {
     private const val TAG = "AppUpdater"
     const val GITHUB_REPO = "Priyadharsant/Remote-Pc"
-    const val CURRENT_APP_VERSION = "3.0"
+    const val DEFAULT_APP_VERSION = "3.0.1"
+    const val CURRENT_APP_VERSION = "3.0.1"
 
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(60, TimeUnit.SECONDS)
+        .followRedirects(true)
+        .followSslRedirects(true)
         .build()
+
+    fun getAppVersion(context: Context): String {
+        return try {
+            val pInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            pInfo.versionName ?: DEFAULT_APP_VERSION
+        } catch (e: Exception) {
+            DEFAULT_APP_VERSION
+        }
+    }
 
     private fun parseSemver(v: String): Triple<Int, Int, Int> {
         val clean = v.replace(Regex("^[^0-9]+"), "").trim()
@@ -46,7 +62,7 @@ object AppUpdater {
         return Triple(major, minor, patch)
     }
 
-    private fun isNewer(latest: String, current: String): Boolean {
+    fun isNewer(latest: String, current: String): Boolean {
         val l = parseSemver(latest)
         val c = parseSemver(current)
         if (l.first > c.first) return true
@@ -56,13 +72,13 @@ object AppUpdater {
         return l.third > c.third
     }
 
-    suspend fun checkUpdate(currentVersion: String = CURRENT_APP_VERSION): GithubReleaseInfo? {
+    suspend fun checkUpdate(currentVersion: String = DEFAULT_APP_VERSION): GithubReleaseInfo? {
         return withContext(Dispatchers.IO) {
             try {
                 val url = "https://api.github.com/repos/$GITHUB_REPO/releases/latest"
                 val req = Request.Builder()
                     .url(url)
-                    .addHeader("User-Agent", "RemotePC-Android-App")
+                    .addHeader("User-Agent", "RemotePC-Android-App/3.0")
                     .addHeader("Accept", "application/vnd.github+json")
                     .get()
                     .build()
@@ -112,58 +128,159 @@ object AppUpdater {
         }
     }
 
+    /**
+     * High-Speed Multi-Stream Parallel Range Downloader
+     * Modeled after Finance Application's high-performance chunked download architecture.
+     * Uses 4 concurrent HTTP Range coroutines and RandomAccessFile seeking.
+     */
     suspend fun downloadAndInstallApk(
         context: Context,
         apkUrl: String,
-        onProgress: (Float) -> Unit,
+        onProgress: (progress: Float, speed: String, streams: Int, transferredBytes: Long, totalBytes: Long) -> Unit,
         onDownloaded: () -> Unit,
         onError: (String) -> Unit
     ) {
         withContext(Dispatchers.IO) {
             try {
-                val req = Request.Builder()
+                val targetDir = File(context.cacheDir, "updates")
+                targetDir.mkdirs()
+                val apkFile = File(targetDir, "Remote_PC_Update.apk")
+                if (apkFile.exists()) apkFile.delete()
+
+                // 1. Resolve redirect and metadata
+                var finalUrl = apkUrl
+                var totalBytes = -1L
+                var acceptRanges = false
+
+                val probeReq = Request.Builder()
                     .url(apkUrl)
-                    .addHeader("User-Agent", "RemotePC-Android-App")
-                    .get()
+                    .addHeader("User-Agent", "RemotePC-Android-App/3.0")
                     .build()
 
-                httpClient.newCall(req).execute().use { resp ->
-                    if (!resp.isSuccessful) {
-                        withContext(Dispatchers.Main) { onError("Download failed: HTTP ${resp.code}") }
+                httpClient.newCall(probeReq).execute().use { probeResp ->
+                    if (!probeResp.isSuccessful) {
+                        withContext(Dispatchers.Main) { onError("HTTP error: ${probeResp.code}") }
                         return@withContext
                     }
-                    val body = resp.body ?: run {
-                        withContext(Dispatchers.Main) { onError("Empty response body") }
-                        return@withContext
+                    finalUrl = probeResp.request.url.toString()
+                    totalBytes = probeResp.body?.contentLength() ?: -1L
+                    val acceptHeader = probeResp.header("Accept-Ranges") ?: ""
+                    acceptRanges = acceptHeader.contains("bytes", ignoreCase = true) || totalBytes > 0
+                }
+
+                val concurrency = 4
+                if (acceptRanges && totalBytes > 2 * 1024 * 1024) {
+                    // ==========================================
+                    // Multi-Stream 4-Coroutine Parallel Download
+                    // ==========================================
+                    Log.d(TAG, "Multi-stream download starting: $concurrency streams, total: $totalBytes bytes")
+                    RandomAccessFile(apkFile, "rw").use { raf ->
+                        raf.setLength(totalBytes)
                     }
 
-                    val targetDir = File(context.cacheDir, "updates")
-                    targetDir.mkdirs()
-                    val apkFile = File(targetDir, "Remote_PC_Update.apk")
-                    if (apkFile.exists()) apkFile.delete()
+                    val chunkSize = (totalBytes + concurrency - 1) / concurrency
+                    val transferredAtomic = AtomicLong(0L)
+                    val startTime = System.currentTimeMillis()
+                    var lastReportTime = 0L
 
-                    val contentLength = body.contentLength()
-                    var totalRead = 0L
+                    val deferreds = (0 until concurrency).map { streamIdx ->
+                        val startByte = streamIdx * chunkSize
+                        val endByte = minOf(totalBytes - 1, (streamIdx + 1) * chunkSize - 1)
 
-                    body.byteStream().use { input ->
-                        FileOutputStream(apkFile).use { output ->
-                            val buffer = ByteArray(8 * 1024)
-                            var read: Int
-                            while (input.read(buffer).also { read = it } != -1) {
-                                output.write(buffer, 0, read)
-                                totalRead += read
-                                if (contentLength > 0) {
-                                    val progress = totalRead.toFloat() / contentLength.toFloat()
-                                    withContext(Dispatchers.Main) { onProgress(progress) }
+                        async(Dispatchers.IO) {
+                            val rangeReq = Request.Builder()
+                                .url(finalUrl)
+                                .addHeader("Range", "bytes=$startByte-$endByte")
+                                .addHeader("User-Agent", "RemotePC-Android-App/3.0")
+                                .build()
+
+                            httpClient.newCall(rangeReq).execute().use { chunkResp ->
+                                if (chunkResp.code != 206 && chunkResp.code != 200) {
+                                    throw IOException("Stream $streamIdx failed: HTTP ${chunkResp.code}")
+                                }
+                                val inputStream = chunkResp.body?.byteStream() ?: throw IOException("Empty chunk stream")
+                                RandomAccessFile(apkFile, "rw").use { raf ->
+                                    raf.seek(startByte)
+                                    val buffer = ByteArray(32 * 1024)
+                                    var read: Int
+                                    while (inputStream.read(buffer).also { read = it } != -1) {
+                                        raf.write(buffer, 0, read)
+                                        val curTransferred = transferredAtomic.addAndGet(read.toLong())
+                                        val now = System.currentTimeMillis()
+                                        if (now - lastReportTime > 120 || curTransferred >= totalBytes) {
+                                            lastReportTime = now
+                                            val elapsedSec = (now - startTime) / 1000.0.coerceAtLeast(0.001)
+                                            val mbps = (curTransferred / (1024.0 * 1024.0) / elapsedSec)
+                                            val speedStr = String.format(Locale.US, "%.1f MB/s", mbps)
+                                            val progress = (curTransferred.toFloat() / totalBytes.toFloat()).coerceIn(0f, 1f)
+                                            withContext(Dispatchers.Main) {
+                                                onProgress(progress, speedStr, concurrency, curTransferred, totalBytes)
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
 
-                    withContext(Dispatchers.Main) {
-                        onDownloaded()
-                        installApk(context, apkFile)
+                    deferreds.awaitAll()
+                } else {
+                    // ==========================================
+                    // Fallback: High-Speed Buffered Single Stream
+                    // ==========================================
+                    Log.d(TAG, "Single stream download starting for $apkUrl")
+                    val dlReq = Request.Builder()
+                        .url(finalUrl)
+                        .addHeader("User-Agent", "RemotePC-Android-App/3.0")
+                        .build()
+
+                    httpClient.newCall(dlReq).execute().use { resp ->
+                        if (!resp.isSuccessful) {
+                            withContext(Dispatchers.Main) { onError("Download failed: HTTP ${resp.code}") }
+                            return@withContext
+                        }
+                        val body = resp.body ?: run {
+                            withContext(Dispatchers.Main) { onError("Empty response body") }
+                            return@withContext
+                        }
+
+                        val streamBytes = body.contentLength().takeIf { it > 0 } ?: totalBytes
+                        var transferred = 0L
+                        val startTime = System.currentTimeMillis()
+                        var lastReport = 0L
+
+                        body.byteStream().use { input ->
+                            FileOutputStream(apkFile).use { output ->
+                                val buffer = ByteArray(64 * 1024)
+                                var read: Int
+                                while (input.read(buffer).also { read = it } != -1) {
+                                    output.write(buffer, 0, read)
+                                    transferred += read
+                                    val now = System.currentTimeMillis()
+                                    if (now - lastReport > 120 || (streamBytes > 0 && transferred >= streamBytes)) {
+                                        lastReport = now
+                                        val elapsedSec = (now - startTime) / 1000.0.coerceAtLeast(0.001)
+                                        val mbps = (transferred / (1024.0 * 1024.0) / elapsedSec)
+                                        val speedStr = String.format(Locale.US, "%.1f MB/s", mbps)
+                                        val progress = if (streamBytes > 0) (transferred.toFloat() / streamBytes.toFloat()).coerceIn(0f, 1f) else 0f
+                                        withContext(Dispatchers.Main) {
+                                            onProgress(progress, speedStr, 1, transferred, streamBytes)
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
+                }
+
+                if (!apkFile.exists() || apkFile.length() == 0L) {
+                    withContext(Dispatchers.Main) { onError("Downloaded file is empty or missing") }
+                    return@withContext
+                }
+
+                withContext(Dispatchers.Main) {
+                    onDownloaded()
+                    installApk(context, apkFile)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Error downloading update", e)

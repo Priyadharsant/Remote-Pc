@@ -5,9 +5,19 @@ interface TitleBarProps {
   isOnline: boolean;
   connectedPhone?: string | null;
   onRefresh?: () => void;
+  hasUpdate?: boolean;
+  latestVersion?: string;
+  onOpenUpdateModal?: () => void;
 }
 
-export const TitleBar: React.FC<TitleBarProps> = ({ isOnline, connectedPhone, onRefresh }) => {
+export const TitleBar: React.FC<TitleBarProps> = ({
+  isOnline,
+  connectedPhone,
+  onRefresh,
+  hasUpdate,
+  latestVersion,
+  onOpenUpdateModal,
+}) => {
   const [isMax, setIsMax] = useState(false);
   const [isStartingServer, setIsStartingServer] = useState(false);
 
@@ -83,6 +93,18 @@ export const TitleBar: React.FC<TitleBarProps> = ({ isOnline, connectedPhone, on
                 <span>Start Server</span>
               </>
             )}
+          </button>
+        )}
+
+        {/* Update Available Badge */}
+        {hasUpdate && (
+          <button
+            onClick={onOpenUpdateModal}
+            title="Update Available - Click to view & install"
+            className="flex items-center gap-1.5 ml-1.5 px-2.5 py-0.5 rounded-full bg-gradient-to-r from-rose-500/20 to-amber-500/20 hover:from-rose-500/35 hover:to-amber-500/35 border border-rose-500/40 text-rose-300 text-[10px] font-bold transition shadow-sm hover:scale-105 active:scale-95 animate-pulse"
+          >
+            <ArrowDownToLine size={10} className="text-rose-400" />
+            <span>Update Available{latestVersion ? ` (v${latestVersion})` : ''}</span>
           </button>
         )}
 

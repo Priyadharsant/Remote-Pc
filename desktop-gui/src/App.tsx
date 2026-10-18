@@ -58,7 +58,7 @@ export function App() {
     return () => clearInterval(interval);
   }, [fetchAllData]);
 
-  // Check for updates on startup (modeled after Finance Application)
+  // Check for updates immediately on open
   useEffect(() => {
     const timer = setTimeout(async () => {
       try {
@@ -68,7 +68,7 @@ export function App() {
           setUpdateModalOpen(true);
         }
       } catch (_) {}
-    }, 2000);
+    }, 300);
     return () => clearTimeout(timer);
   }, []);
 
@@ -87,8 +87,15 @@ export function App() {
         <SetupWizard defaultName={status?.name} onComplete={fetchAllData} />
       )}
 
-      {/* Frameless Glassmorphic Title Bar */}
-      <TitleBar isOnline={isOnline} connectedPhone={connectedClient} onRefresh={fetchAllData} />
+      {/* Frameless Glassmorphic Title Bar with Live Update Pill */}
+      <TitleBar
+        isOnline={isOnline}
+        connectedPhone={connectedClient}
+        onRefresh={fetchAllData}
+        hasUpdate={Boolean(updateData?.hasUpdate)}
+        latestVersion={updateData?.latestVersion}
+        onOpenUpdateModal={() => setUpdateModalOpen(true)}
+      />
 
       {/* Main App Body */}
       <div className="flex flex-1 overflow-hidden">

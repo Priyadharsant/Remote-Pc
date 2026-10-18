@@ -662,13 +662,18 @@ class MainActivity : FragmentActivity() {
                     var showStartupUpdateDialog by remember { mutableStateOf(false) }
                     var isDownloadingStartupUpdate by remember { mutableStateOf(false) }
                     var startupUpdateProgress by remember { mutableFloatStateOf(0f) }
+                    var startupUpdateSpeed by remember { mutableStateOf("") }
+                    var startupUpdateStreams by remember { mutableIntStateOf(1) }
+                    var startupUpdateTransferred by remember { mutableLongStateOf(0L) }
+                    var startupUpdateTotal by remember { mutableLongStateOf(0L) }
 
                     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
                     val scope = rememberCoroutineScope()
 
                     LaunchedEffect(Unit) {
                         scope.launch(Dispatchers.IO) {
-                            val update = AppUpdater.checkUpdate()
+                            val appVer = AppUpdater.getAppVersion(this@MainActivity)
+                            val update = AppUpdater.checkUpdate(appVer)
                             if (update != null && update.hasUpdate) {
                                 withContext(Dispatchers.Main) {
                                     pendingUpdate = update
@@ -1339,11 +1344,32 @@ class MainActivity : FragmentActivity() {
                                                 color = AppTheme.AccentCyan,
                                                 trackColor = AppTheme.CardDark
                                             )
-                                            Text(
-                                                "Downloading: ${(startupUpdateProgress * 100).toInt()}%",
-                                                fontSize = 11.sp,
-                                                color = AppTheme.TextSecondary
-                                            )
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                                                horizontalArrangement = Arrangement.SpaceBetween,
+                                                verticalAlignment = Alignment.CenterVertically
+                                            ) {
+                                                Text(
+                                                    "Downloading: ${(startupUpdateProgress * 100).toInt()}%${if (startupUpdateSpeed.isNotEmpty()) " · $startupUpdateSpeed" else ""}",
+                                                    fontSize = 11.sp,
+                                                    fontWeight = FontWeight.SemiBold,
+                                                    color = AppTheme.AccentCyan
+                                                )
+                                                if (startupUpdateStreams > 1) {
+                                                    Text(
+                                                        "⚡ ${startupUpdateStreams} Multi-Streams",
+                                                        fontSize = 10.sp,
+                                                        color = AppTheme.TextSecondary
+                                                    )
+                                                }
+                                            }
+                                            if (startupUpdateTotal > 0L) {
+                                                Text(
+                                                    "${formatFileSize(startupUpdateTransferred)} / ${formatFileSize(startupUpdateTotal)}",
+                                                    fontSize = 10.sp,
+                                                    color = AppTheme.TextSecondary
+                                                )
+                                            }
                                         }
                                     }
                                 },
@@ -1355,7 +1381,13 @@ class MainActivity : FragmentActivity() {
                                                 AppUpdater.downloadAndInstallApk(
                                                     context = this@MainActivity,
                                                     apkUrl = info.apkUrl,
-                                                    onProgress = { p -> startupUpdateProgress = p },
+                                                    onProgress = { p, speed, streams, transferred, total ->
+                                                        startupUpdateProgress = p
+                                                        startupUpdateSpeed = speed
+                                                        startupUpdateStreams = streams
+                                                        startupUpdateTransferred = transferred
+                                                        startupUpdateTotal = total
+                                                    },
                                                     onDownloaded = {
                                                         isDownloadingStartupUpdate = false
                                                         showStartupUpdateDialog = false
