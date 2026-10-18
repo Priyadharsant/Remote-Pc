@@ -425,12 +425,15 @@ ipcMain.handle('download-and-install-update', async (event, { url, version }) =>
 
     console.log(`[AutoUpdater] Download completed (${(stats.size / (1024 * 1024)).toFixed(1)} MB). Launching Inno Setup...`);
 
-    // Launch Inno Setup installer (/SILENT /CLOSEAPPLICATIONS) so user doesn't need to manually click Next, Next
+    // Launch Inno Setup installer (/SILENT /FORCECLOSEAPPLICATIONS /CLOSEAPPLICATIONS) so user doesn't need to manually click Next, Next
     const updaterScript = path.join(tempDir, `remotepc_update_${Date.now()}.bat`);
     const scriptContent = [
       `@echo off`,
+      `taskkill /F /IM "Remote_Server.exe" /T >nul 2>&1`,
+      `taskkill /F /IM "Remote PC GUI.exe" /T >nul 2>&1`,
+      `taskkill /F /IM "electron.exe" /T >nul 2>&1`,
       `timeout /t 1 /nobreak >nul`,
-      `start "" "${destPath}" /SILENT /CLOSEAPPLICATIONS`,
+      `start "" "${destPath}" /SILENT /FORCECLOSEAPPLICATIONS /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS=no`,
       `del "%~f0"`,
     ].join('\r\n');
 

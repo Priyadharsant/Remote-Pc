@@ -67,7 +67,6 @@ const uploadAgent = new https.Agent({
   keepAlive: true,
   maxSockets: 8,
   maxFreeSockets: 4,
-  timeout: 60000,
 });
 
 function uploadFileStream(uploadUrl, filePath, contentType, token) {
@@ -252,6 +251,7 @@ async function main() {
   }
 
   const checksumLines = [];
+  let latestYmlPath = null;
 
   if (hasExe) {
     const exeStats = fs.statSync(exePath);
@@ -268,7 +268,7 @@ async function main() {
       `releaseDate: '${new Date().toISOString()}'`,
       "",
     ].join("\n");
-    const latestYmlPath = path.join(ROOT_DIR, "latest.yml");
+    latestYmlPath = path.join(ROOT_DIR, "latest.yml");
     fs.writeFileSync(latestYmlPath, latestYmlContent, "utf-8");
     checksumLines.push(`${computeSha256(exePath)}  Remote_PC_Setup.exe`);
   }
@@ -285,17 +285,17 @@ async function main() {
   fs.writeFileSync(checksumPath, checksumLines.join("\n"), "utf-8");
 
   const filesToUpload = [
-    {
+    hasExe && {
       localPath: exePath,
       name: "Remote_PC_Setup.exe",
       contentType: "application/vnd.microsoft.portable-executable",
     },
-    {
+    hasApk && {
       localPath: apkPath,
       name: "Remote.PC.apk",
       contentType: "application/vnd.android.package-archive",
     },
-    {
+    latestYmlPath && {
       localPath: latestYmlPath,
       name: "latest.yml",
       contentType: "text/yaml",
@@ -305,7 +305,7 @@ async function main() {
       name: "checksums.txt",
       contentType: "text/plain",
     },
-  ].filter((f) => f.localPath && fs.existsSync(f.localPath));
+  ].filter((f) => f && f.localPath && fs.existsSync(f.localPath));
 
   const normalizeName = (s) =>
     decodeURIComponent(s || "")
@@ -329,10 +329,14 @@ async function main() {
 
   // 4. Upload all assets in parallel using high-speed streaming
   console.log(`\n🚀 Uploading ${filesToUpload.length} release assets in parallel...`);
+  const baseUploadUrl = release.upload_url
+    ? release.upload_url.replace(/\{.*\}/, "")
+    : `https://uploads.github.com/repos/${OWNER}/${REPO}/releases/${release.id}/assets`;
+
   await Promise.all(
     filesToUpload.map(async (item) => {
       const fileStats = fs.statSync(item.localPath);
-      const uploadUrl = `https://uploads.github.com/repos/${OWNER}/${REPO}/releases/${release.id}/assets?name=${encodeURIComponent(item.name)}`;
+      const uploadUrl = `${baseUploadUrl}?name=${encodeURIComponent(item.name)}`;
       try {
         const uploadedAsset = await uploadFileStream(
           uploadUrl,

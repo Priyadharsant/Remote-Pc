@@ -2,7 +2,7 @@
 ; Remote PC Server & Modern React Dashboard Setup Script
 
 #define MyAppName "Remote PC"
-#define MyAppVersion "3.0.1"
+#define MyAppVersion "3.0.2"
 #define MyAppPublisher "Remote PC"
 #define MyAppServerExe "Remote_Server.exe"
 #define MyAppGuiExe "Remote PC GUI.exe"
@@ -28,7 +28,8 @@ SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=lowest
 DisableProgramGroupPage=auto
-CloseApplications=yes
+CloseApplications=force
+CloseApplicationsFilter=*.exe
 RestartApplications=no
 UninstallDisplayIcon={app}\{#MyAppIcon}
 
@@ -45,6 +46,8 @@ Source: "Remote_Server.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "server\logo.ico"; DestDir: "{app}"; Flags: ignoreversion
 Source: "server\logo.png"; DestDir: "{app}"; Flags: ignoreversion
 Source: "server\config.json"; DestDir: "{app}"; Flags: onlyifdoesntexist
+Source: "C:\Users\priya\AppData\Local\Programs\Python\Python312\python312.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "C:\Users\priya\AppData\Local\Programs\Python\Python312\vcruntime140.dll"; DestDir: "{app}"; Flags: ignoreversion
 
 ; Modern React + Electron GUI Suite (win-unpacked directory)
 Source: "desktop-gui\dist-electron\win-unpacked\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -68,3 +71,26 @@ Filename: "taskkill"; Parameters: "/F /IM ""{#MyAppGuiExe}"""; Flags: runhidden;
 
 [UninstallDelete]
 Type: files; Name: "{app}\Remote_Server.log"
+
+[Code]
+procedure KillRunningProcesses();
+var
+  ResultCode: Integer;
+begin
+  Exec('taskkill.exe', '/F /IM Remote_Server.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec('taskkill.exe', '/F /IM "Remote PC GUI.exe" /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec('taskkill.exe', '/F /IM electron.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Sleep(500);
+end;
+
+function InitializeSetup(): Boolean;
+begin
+  KillRunningProcesses();
+  Result := True;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  KillRunningProcesses();
+  Result := '';
+end;

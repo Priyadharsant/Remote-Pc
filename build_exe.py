@@ -143,6 +143,12 @@ def build(args):
                 f"--distpath={ROOT_DIR}",
                 f"--workpath={os.path.join(ROOT_DIR, 'build', 'server')}",
             ]
+
+            py_base = r"C:\Users\priya\AppData\Local\Programs\Python\Python312"
+            for dll in ["python312.dll", "vcruntime140.dll", "vcruntime140_1.dll"]:
+                dll_path = os.path.join(py_base, dll)
+                if os.path.exists(dll_path):
+                    cmd_server.append(f"--add-binary={dll_path};.")
             if args.clean:
                 cmd_server.append("--clean")
             cmd_server.append(os.path.join(SERVER_DIR, "Remote_Server.py"))
