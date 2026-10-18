@@ -1,8 +1,10 @@
 package com.example.remoteapp
 
+import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.pm.ActivityInfo
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.AudioAttributes
@@ -22,8 +24,10 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.*
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.VolumeMute
@@ -38,31 +42,33 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.drawscope.scale
-import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlinx.coroutines.*
-import okhttp3.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 import okio.ByteString
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.IOException
+import java.io.File
 import java.net.URLEncoder
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.TimeUnit
-
-enum class DesktopControlMode {
-    DIRECT_TOUCH,
-    VIRTUAL_TRACKPAD
-}
 
 data class MonitorInfo(
     val id: Int,
@@ -82,37 +88,53 @@ fun RemoteDesktopScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
-    // Screen State
+    // 1. Force Landscape on Enter, Restore Previous on Exit
+    DisposableEffect(Unit) {
+        val activity = context as? Activity
+        val previousOrientation = activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        onDispose {
+            activity?.requestedOrientation = previousOrientation
+        }
+    }
+
+    // Intercept hardware/gesture Back button
+    BackHandler {
+        onBack()
+    }
+
+    // Live Frame and Connection State
     var isConnected by remember { mutableStateOf(false) }
     var connectionError by remember { mutableStateOf<String?>(null) }
+    var reconnectTrigger by remember { mutableIntStateOf(0) }
     var currentBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var monitors by remember { mutableStateOf<List<MonitorInfo>>(emptyList()) }
     var selectedMonitorId by remember { mutableIntStateOf(1) }
 
-    // Control & Display Settings
-    var controlMode by remember { mutableStateOf(DesktopControlMode.DIRECT_TOUCH) }
-    var zoomScale by remember { mutableFloatStateOf(1.0f) }
-    var panOffset by remember { mutableStateOf(Offset.Zero) }
-    var canvasSize by remember { mutableStateOf(IntSize.Zero) }
-
-    // Streaming Quality
-    var selectedFps by remember { mutableIntStateOf(30) }
-    var selectedQuality by remember { mutableIntStateOf(65) }
-    var selectedScale by remember { mutableFloatStateOf(0.75f) }
+    // Stream Presets (High performance defaults: 35 FPS, 55 quality, 0.8 scale)
+    var selectedFps by remember { mutableIntStateOf(35) }
+    var selectedQuality by remember { mutableIntStateOf(55) }
+    var selectedScale by remember { mutableFloatStateOf(0.85f) }
 
     // Live Metrics
     var fpsCounter by remember { mutableIntStateOf(0) }
     var currentFps by remember { mutableIntStateOf(0) }
     var frameResolution by remember { mutableStateOf("1920x1080") }
 
-    // UI Panels
-    var showHud by remember { mutableStateOf(true) }
+    // Side Drawer / Flyout Menu & Panels
+    var showSideMenu by remember { mutableStateOf(false) }
     var showKeyboardSheet by remember { mutableStateOf(false) }
-    var showQualityDialog by remember { mutableStateOf(false) }
     var isAudioPlaying by remember { mutableStateOf(false) }
     var typedText by remember { mutableStateOf("") }
 
-    // WebSocket Reference
+    // Canvas & Destination Fit Geometry
+    var canvasSize by remember { mutableStateOf(IntSize.Zero) }
+    var dstLeft by remember { mutableFloatStateOf(0f) }
+    var dstTop by remember { mutableFloatStateOf(0f) }
+    var dstWidth by remember { mutableFloatStateOf(0f) }
+    var dstHeight by remember { mutableFloatStateOf(0f) }
+
+    // WebSocket Reference & Media Player
     var webSocketRef by remember { mutableStateOf<WebSocket?>(null) }
     var mediaPlayerRef by remember { mutableStateOf<MediaPlayer?>(null) }
 
@@ -125,7 +147,7 @@ fun RemoteDesktopScreen(
             } else {
                 @Suppress("DEPRECATION")
                 val vibrator = context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
-                vibrator?.vibrate(30)
+                vibrator?.vibrate(25)
             }
         } catch (_: Exception) {}
     }
@@ -188,22 +210,37 @@ fun RemoteDesktopScreen(
         }
     }
 
-    // Connect WebSocket
-    DisposableEffect(targetIp, password) {
+    // Connect WebSocket with 15s timeout
+    DisposableEffect(targetIp, password, reconnectTrigger) {
         val client = OkHttpClient.Builder()
             .readTimeout(0, TimeUnit.MILLISECONDS)
-            .connectTimeout(5, TimeUnit.SECONDS)
+            .connectTimeout(15, TimeUnit.SECONDS)
+            .retryOnConnectionFailure(true)
             .build()
 
         val encodedPass = try { URLEncoder.encode(password, "UTF-8") } catch (_: Exception) { password }
         val wsUrl = "ws://$targetIp:5055/ws/remote-desktop?password=$encodedPass&token=$encodedPass"
         val request = Request.Builder().url(wsUrl).build()
 
+        val decodeOptions = BitmapFactory.Options().apply {
+            inPreferredConfig = Bitmap.Config.RGB_565
+        }
+
         val ws = client.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 isConnected = true
                 connectionError = null
                 Log.d("RemoteDesktop", "Connected to Remote Desktop server")
+
+                // Immediately request configured FPS & quality
+                val configMsg = JSONObject().apply {
+                    put("type", "set_quality")
+                    put("fps", selectedFps)
+                    put("quality", selectedQuality)
+                    put("scale", selectedScale.toDouble())
+                    put("monitor", selectedMonitorId)
+                }
+                webSocket.send(configMsg.toString())
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -245,7 +282,7 @@ fun RemoteDesktopScreen(
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
                 val data = bytes.toByteArray()
-                // Format: [4B Magic: 'RD01'][2B MonId][2B Width][2B Height][2B FrameId][Payload]
+                // Header format: [4B Magic: 'RD01'][2B MonId][2B Width][2B Height][2B FrameId][Payload]
                 if (data.size > 12) {
                     val magic = String(data, 0, 4)
                     if (magic == "RD01") {
@@ -255,7 +292,7 @@ fun RemoteDesktopScreen(
                         val h = buffer.getShort(8).toInt()
 
                         val jpegBytes = data.copyOfRange(12, data.size)
-                        val bmp = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size)
+                        val bmp = BitmapFactory.decodeByteArray(jpegBytes, 0, jpegBytes.size, decodeOptions)
                         if (bmp != null) {
                             currentBitmap = bmp
                             fpsCounter++
@@ -283,136 +320,219 @@ fun RemoteDesktopScreen(
             mediaPlayerRef?.stop()
             mediaPlayerRef?.release()
             mediaPlayerRef = null
+            webSocketRef = null
         }
     }
 
-    BackHandler {
-        onBack()
-    }
-
+    // -------------------------------------------------------------------------
+    // Main UI Container (Full Screen Landscape)
+    // -------------------------------------------------------------------------
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xFF0F172A))
+            .background(Color.Black)
+            .onSizeChanged { canvasSize = it }
     ) {
-        // ---------------------------------------------------------------------
-        // Interactive Screen Stream Canvas
-        // ---------------------------------------------------------------------
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .onSizeChanged { canvasSize = it }
-                .pointerInput(controlMode, zoomScale, panOffset, selectedMonitorId) {
-                    if (controlMode == DesktopControlMode.DIRECT_TOUCH) {
-                        detectTapGestures(
-                            onTap = { tapOffset ->
-                                triggerHaptic()
-                                val normX = ((tapOffset.x - panOffset.x) / (canvasSize.width * zoomScale)).coerceIn(0f, 1f)
-                                val normY = ((tapOffset.y - panOffset.y) / (canvasSize.height * zoomScale)).coerceIn(0f, 1f)
-                                sendAction(
-                                    JSONObject().apply {
-                                        put("type", "mouse_click")
-                                        put("button", "left")
-                                        put("x", normX.toDouble())
-                                        put("y", normY.toDouble())
-                                        put("is_normalized", true)
-                                        put("monitor", selectedMonitorId)
-                                    }
-                                )
-                            },
-                            onDoubleTap = { tapOffset ->
-                                triggerHaptic()
-                                val normX = ((tapOffset.x - panOffset.x) / (canvasSize.width * zoomScale)).coerceIn(0f, 1f)
-                                val normY = ((tapOffset.y - panOffset.y) / (canvasSize.height * zoomScale)).coerceIn(0f, 1f)
-                                sendAction(
-                                    JSONObject().apply {
-                                        put("type", "mouse_click")
-                                        put("button", "left")
-                                        put("clicks", 2)
-                                        put("x", normX.toDouble())
-                                        put("y", normY.toDouble())
-                                        put("is_normalized", true)
-                                        put("monitor", selectedMonitorId)
-                                    }
-                                )
-                            },
-                            onLongPress = { tapOffset ->
-                                triggerHaptic()
-                                val normX = ((tapOffset.x - panOffset.x) / (canvasSize.width * zoomScale)).coerceIn(0f, 1f)
-                                val normY = ((tapOffset.y - panOffset.y) / (canvasSize.height * zoomScale)).coerceIn(0f, 1f)
-                                sendAction(
-                                    JSONObject().apply {
-                                        put("type", "mouse_click")
-                                        put("button", "right")
-                                        put("x", normX.toDouble())
-                                        put("y", normY.toDouble())
-                                        put("is_normalized", true)
-                                        put("monitor", selectedMonitorId)
-                                    }
-                                )
-                                Toast.makeText(context, "Right Click", Toast.LENGTH_SHORT).show()
+        val bmp = currentBitmap
+        if (bmp != null) {
+            val imageBitmap = remember(bmp) { bmp.asImageBitmap() }
+
+            // Calculate true laptop 16:9 aspect ratio letterbox fit
+            val canvasW = canvasSize.width.toFloat()
+            val canvasH = canvasSize.height.toFloat()
+            val imgW = imageBitmap.width.toFloat()
+            val imgH = imageBitmap.height.toFloat()
+
+            if (canvasW > 0 && canvasH > 0 && imgW > 0 && imgH > 0) {
+                val scaleFactor = minOf(canvasW / imgW, canvasH / imgH)
+                val fitW = imgW * scaleFactor
+                val fitH = imgH * scaleFactor
+                dstLeft = (canvasW - fitW) / 2f
+                dstTop = (canvasH - fitH) / 2f
+                dstWidth = fitW
+                dstHeight = fitH
+            }
+
+            // Real Touch Screen Pointer Input: Tap to click, double tap, hold right click, drag to drag, 2-finger scroll
+            var lastTapTime by remember { mutableLongStateOf(0L) }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(dstLeft, dstTop, dstWidth, dstHeight, selectedMonitorId) {
+                        awaitEachGesture {
+                            val down = awaitFirstDown(requireUnconsumed = false)
+                            val startPos = down.position
+
+                            // Verify touch occurred inside active desktop canvas
+                            val inBounds = startPos.x in dstLeft..(dstLeft + dstWidth) &&
+                                    startPos.y in dstTop..(dstTop + dstHeight)
+                            if (!inBounds || dstWidth <= 0f || dstHeight <= 0f) {
+                                return@awaitEachGesture
                             }
-                        )
+
+                            var isDragging = false
+                            var isLongPress = false
+                            val downTime = System.currentTimeMillis()
+
+                            val normX = ((startPos.x - dstLeft) / dstWidth).coerceIn(0f, 1f)
+                            val normY = ((startPos.y - dstTop) / dstHeight).coerceIn(0f, 1f)
+
+                            while (true) {
+                                val event = awaitPointerEvent()
+                                val activePointers = event.changes.filter { it.pressed }
+                                if (activePointers.isEmpty()) {
+                                    break
+                                }
+
+                                if (activePointers.size == 1) {
+                                    val currentChange = activePointers[0]
+                                    val currentPos = currentChange.position
+                                    val dist = (currentPos - startPos).getDistance()
+
+                                    // Long press detection: held > 500ms without dragging -> Right Click
+                                    if (!isDragging && !isLongPress && System.currentTimeMillis() - downTime > 500 && dist < 20f) {
+                                        isLongPress = true
+                                        triggerHaptic()
+                                        sendAction(JSONObject().apply {
+                                            put("type", "mouse_click")
+                                            put("button", "right")
+                                            put("x", normX.toDouble())
+                                            put("y", normY.toDouble())
+                                            put("is_normalized", true)
+                                            put("monitor", selectedMonitorId)
+                                        })
+                                        currentChange.consume()
+                                    } else if (!isLongPress && dist > 14f) {
+                                        // Real touch drag: trigger mouse_down then stream mouse_move
+                                        if (!isDragging) {
+                                            isDragging = true
+                                            sendAction(JSONObject().apply {
+                                                put("type", "mouse_down")
+                                                put("button", "left")
+                                                put("x", normX.toDouble())
+                                                put("y", normY.toDouble())
+                                                put("is_normalized", true)
+                                                put("monitor", selectedMonitorId)
+                                            })
+                                        }
+                                        val curNormX = ((currentPos.x - dstLeft) / dstWidth).coerceIn(0f, 1f)
+                                        val curNormY = ((currentPos.y - dstTop) / dstHeight).coerceIn(0f, 1f)
+                                        sendAction(JSONObject().apply {
+                                            put("type", "mouse_move")
+                                            put("x", curNormX.toDouble())
+                                            put("y", curNormY.toDouble())
+                                            put("is_normalized", true)
+                                            put("monitor", selectedMonitorId)
+                                        })
+                                        currentChange.consume()
+                                    }
+                                } else if (activePointers.size == 2) {
+                                    // Two-finger precision scroll wheel
+                                    val p1 = activePointers[0]
+                                    val p2 = activePointers[1]
+                                    val dragY = (p1.position.y - p1.previousPosition.y + p2.position.y - p2.previousPosition.y) / 2f
+                                    val dragX = (p1.position.x - p1.previousPosition.x + p2.position.x - p2.previousPosition.x) / 2f
+                                    if (Math.abs(dragY) > 2f || Math.abs(dragX) > 2f) {
+                                        sendAction(JSONObject().apply {
+                                            put("type", "mouse_scroll")
+                                            put("dy", (dragY * 1.6).toDouble())
+                                            put("dx", (-dragX * 1.6).toDouble())
+                                        })
+                                        p1.consume()
+                                        p2.consume()
+                                    }
+                                }
+                            }
+
+                            // Finger release
+                            if (isDragging) {
+                                sendAction(JSONObject().apply {
+                                    put("type", "mouse_up")
+                                    put("button", "left")
+                                    put("monitor", selectedMonitorId)
+                                })
+                            } else if (!isLongPress && System.currentTimeMillis() - downTime < 450) {
+                                triggerHaptic()
+                                val now = System.currentTimeMillis()
+                                val isDouble = (now - lastTapTime) < 320
+                                lastTapTime = now
+                                sendAction(JSONObject().apply {
+                                    put("type", "mouse_click")
+                                    put("button", "left")
+                                    put("clicks", if (isDouble) 2 else 1)
+                                    put("x", normX.toDouble())
+                                    put("y", normY.toDouble())
+                                    put("is_normalized", true)
+                                    put("monitor", selectedMonitorId)
+                                })
+                            }
+                        }
                     }
+            ) {
+                // Canvas renders with zero distortion in laptop ratio
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    drawImage(
+                        image = imageBitmap,
+                        dstOffset = IntOffset(dstLeft.toInt(), dstTop.toInt()),
+                        dstSize = IntSize(dstWidth.toInt(), dstHeight.toInt())
+                    )
                 }
-                .pointerInput(controlMode, zoomScale) {
-                    if (controlMode == DesktopControlMode.DIRECT_TOUCH) {
-                        detectTransformGestures { _, pan, zoom, _ ->
-                            val newZoom = (zoomScale * zoom).coerceIn(1.0f, 4.0f)
-                            zoomScale = newZoom
-                            if (newZoom > 1.05f) {
-                                panOffset += pan
-                            } else {
-                                panOffset = Offset.Zero
+            }
+        } else {
+            // Connecting or Error Placeholder
+            Box(
+                modifier = Modifier.fillMaxSize(),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp),
+                    modifier = Modifier.padding(24.dp)
+                ) {
+                    if (connectionError != null) {
+                        Icon(
+                            imageVector = Icons.Rounded.CloudOff,
+                            contentDescription = "Error",
+                            tint = Color(0xFFEF4444),
+                            modifier = Modifier.size(52.dp)
+                        )
+                        Text(
+                            text = "Connection Failed: $connectionError",
+                            color = Color(0xFFEF4444),
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Button(
+                                onClick = {
+                                    connectionError = null
+                                    reconnectTrigger++
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6366F1)),
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Retry Connection")
+                            }
+                            OutlinedButton(
+                                onClick = onBack,
+                                shape = RoundedCornerShape(12.dp)
+                            ) {
+                                Text("Back", color = Color.White)
                             }
                         }
                     } else {
-                        // Virtual Trackpad relative movements
-                        detectDragGestures { change, dragAmount ->
-                            change.consume()
-                            sendAction(
-                                JSONObject().apply {
-                                    put("type", "mouse_relative")
-                                    put("dx", dragAmount.x.toDouble())
-                                    put("dy", dragAmount.y.toDouble())
-                                    put("sensitivity", 1.6)
-                                }
-                            )
-                        }
-                    }
-                }
-        ) {
-            val bmp = currentBitmap
-            if (bmp != null) {
-                val imageBitmap = remember(bmp) { bmp.asImageBitmap() }
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    translate(left = panOffset.x, top = panOffset.y) {
-                        scale(zoomScale, pivot = Offset.Zero) {
-                            drawImage(
-                                image = imageBitmap,
-                                dstSize = IntSize(size.width.toInt(), size.height.toInt())
-                            )
-                        }
-                    }
-                }
-            } else {
-                // Loading or Connecting Placeholder
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(16.dp)
-                    ) {
                         CircularProgressIndicator(
                             color = Color(0xFF6366F1),
                             strokeWidth = 3.dp,
                             modifier = Modifier.size(48.dp)
                         )
                         Text(
-                            text = if (connectionError != null) "Connection Error: $connectionError" else "Connecting to Remote PC Screen...",
-                            color = if (connectionError != null) Color(0xFFEF4444) else Color(0xFF94A3B8),
+                            text = "Connecting to Remote PC ($targetIp)...",
+                            color = Color(0xFF94A3B8),
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Medium
                         )
@@ -422,268 +542,337 @@ fun RemoteDesktopScreen(
         }
 
         // ---------------------------------------------------------------------
-        // Top Floating HUD & Status Bar
+        // Floating Side Menu Edge Pill (Subtle, unobtrusive)
         // ---------------------------------------------------------------------
-        AnimatedVisibility(
-            visible = showHud,
-            enter = fadeIn() + slideInVertically(),
-            exit = fadeOut() + slideOutVertically(),
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 20.dp)
-        ) {
-            Row(
+        if (!showSideMenu) {
+            Box(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(16.dp, RoundedCornerShape(20.dp))
-                    .background(Color(0xE61E293B), RoundedCornerShape(20.dp))
-                    .border(1.dp, Color(0xFF334155), RoundedCornerShape(20.dp))
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+                    .align(Alignment.CenterEnd)
+                    .padding(end = 4.dp)
+                    .shadow(12.dp, RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
+                    .clip(RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
+                    .background(Color(0xD90F172A))
+                    .border(1.dp, Color(0xFF334155), RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
+                    .clickable {
+                        triggerHaptic()
+                        showSideMenu = true
+                    }
+                    .padding(horizontal = 10.dp, vertical = 14.dp)
             ) {
-                // Back Button & Live Badge
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(
-                        onClick = onBack,
-                        modifier = Modifier.size(36.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.ArrowBack,
-                            contentDescription = "Exit",
-                            tint = Color.White
-                        )
-                    }
-
-                    Spacer(modifier = Modifier.width(6.dp))
-
-                    Column {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(if (isConnected) Color(0xFF10B981) else Color(0xFFEF4444))
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = if (isConnected) "LIVE • $currentFps FPS" else "CONNECTING",
-                                color = Color.White,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                        }
-                        Text(
-                            text = "$targetIp ($frameResolution)",
-                            color = Color(0xFF94A3B8),
-                            fontSize = 10.sp
-                        )
-                    }
-                }
-
-                // Action Buttons Tray
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    // Hybrid Mode Switcher (Touch vs Trackpad)
-                    IconButton(
-                        onClick = {
-                            triggerHaptic()
-                            controlMode = if (controlMode == DesktopControlMode.DIRECT_TOUCH) {
-                                DesktopControlMode.VIRTUAL_TRACKPAD
-                            } else {
-                                DesktopControlMode.DIRECT_TOUCH
-                            }
-                            Toast.makeText(
-                                context,
-                                if (controlMode == DesktopControlMode.DIRECT_TOUCH) "Touch Mode: Tap anywhere to click" else "Trackpad Mode: Slide to steer cursor",
-                                Toast.LENGTH_SHORT
-                            ).show()
-                        },
-                        modifier = Modifier
-                            .size(36.dp)
-                            .background(
-                                if (controlMode == DesktopControlMode.DIRECT_TOUCH) Color(0xFF6366F1).copy(alpha = 0.25f) else Color(0xFF38BDF8).copy(alpha = 0.25f),
-                                CircleShape
-                            )
-                    ) {
-                        Icon(
-                            imageVector = if (controlMode == DesktopControlMode.DIRECT_TOUCH) Icons.Rounded.TouchApp else Icons.Rounded.Mouse,
-                            contentDescription = "Toggle Control Mode",
-                            tint = if (controlMode == DesktopControlMode.DIRECT_TOUCH) Color(0xFF818CF8) else Color(0xFF38BDF8)
-                        )
-                    }
-
-                    // Monitor Selector (if multiple monitors detected)
-                    if (monitors.size > 1) {
-                        IconButton(
-                            onClick = {
-                                triggerHaptic()
-                                val nextMon = if (selectedMonitorId >= monitors.size) 1 else selectedMonitorId + 1
-                                selectedMonitorId = nextMon
-                                sendAction(
-                                    JSONObject().apply {
-                                        put("type", "set_monitor")
-                                        put("monitor", nextMon)
-                                    }
-                                )
-                                Toast.makeText(context, "Switched to Display $nextMon", Toast.LENGTH_SHORT).show()
-                            },
-                            modifier = Modifier.size(36.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Monitor,
-                                contentDescription = "Switch Display",
-                                tint = Color(0xFF38BDF8)
-                            )
-                        }
-                    }
-
-                    // Audio Stream Toggle
-                    IconButton(
-                        onClick = {
-                            triggerHaptic()
-                            toggleAudio()
-                        },
-                        modifier = Modifier
-                            .size(36.dp)
-                            .background(
-                                if (isAudioPlaying) Color(0xFF10B981).copy(alpha = 0.25f) else Color.Transparent,
-                                CircleShape
-                            )
-                    ) {
-                        Icon(
-                            imageVector = if (isAudioPlaying) Icons.AutoMirrored.Rounded.VolumeUp else Icons.AutoMirrored.Rounded.VolumeMute,
-                            contentDescription = "PC Audio",
-                            tint = if (isAudioPlaying) Color(0xFF34D399) else Color(0xFF94A3B8)
-                        )
-                    }
-
-                    // Clipboard Sync (Pull PC clipboard)
-                    IconButton(
-                        onClick = {
-                            triggerHaptic()
-                            sendAction(JSONObject().apply { put("type", "clipboard_get") })
-                        },
-                        modifier = Modifier.size(36.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.ContentPaste,
-                            contentDescription = "Fetch PC Clipboard",
-                            tint = Color(0xFFFBBF24)
-                        )
-                    }
-
-                    // Virtual Windows Keyboard Sheet Toggle
-                    IconButton(
-                        onClick = {
-                            triggerHaptic()
-                            showKeyboardSheet = true
-                        },
-                        modifier = Modifier.size(36.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Keyboard,
-                            contentDescription = "Windows Keyboard",
-                            tint = Color(0xFFA78BFA)
-                        )
-                    }
-
-                    // Quality & FPS Dialog
-                    IconButton(
-                        onClick = {
-                            triggerHaptic()
-                            showQualityDialog = true
-                        },
-                        modifier = Modifier.size(36.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Settings,
-                            contentDescription = "Quality Settings",
-                            tint = Color(0xFF94A3B8)
-                        )
-                    }
+                    Icon(
+                        imageVector = Icons.Rounded.Menu,
+                        contentDescription = "Open Remote Menu",
+                        tint = Color(0xFF38BDF8),
+                        modifier = Modifier.size(22.dp)
+                    )
+                    Text(
+                        text = "$currentFps",
+                        color = if (currentFps >= 25) Color(0xFF10B981) else Color(0xFFFBBF24),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold
+                    )
                 }
             }
         }
 
         // ---------------------------------------------------------------------
-        // Bottom Controls for Virtual Trackpad Mode
+        // Slide-in Flyout Side Menu Drawer (Appears only on click)
         // ---------------------------------------------------------------------
-        if (controlMode == DesktopControlMode.VIRTUAL_TRACKPAD) {
+        AnimatedVisibility(
+            visible = showSideMenu,
+            enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
+            exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut(),
+            modifier = Modifier.align(Alignment.CenterEnd)
+        ) {
             Box(
                 modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .fillMaxWidth()
-                    .padding(bottom = 24.dp, start = 20.dp, end = 20.dp)
+                    .fillMaxHeight()
+                    .width(320.dp)
+                    .shadow(24.dp, RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp))
+                    .background(Color(0xF50F172A))
+                    .border(1.dp, Color(0xFF334155), RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp))
+                    .padding(16.dp)
             ) {
-                Row(
+                Column(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .shadow(16.dp, RoundedCornerShape(24.dp))
-                        .background(Color(0xF01E293B), RoundedCornerShape(24.dp))
-                        .border(1.dp, Color(0xFF334155), RoundedCornerShape(24.dp))
-                        .padding(8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        .fillMaxSize()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    Button(
-                        onClick = {
-                            triggerHaptic()
-                            sendAction(
-                                JSONObject().apply {
-                                    put("type", "mouse_click")
-                                    put("button", "left")
-                                }
-                            )
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(52.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155))
+                    // Header with Close and Back
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("Left Click", color = Color.White, fontWeight = FontWeight.Bold)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .background(if (isConnected) Color(0xFF10B981) else Color(0xFFEF4444), CircleShape)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = "Remote Controls",
+                                color = Color.White,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            IconButton(
+                                onClick = onBack,
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Exit", tint = Color(0xFFEF4444))
+                            }
+                            IconButton(
+                                onClick = { showSideMenu = false },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(Icons.Rounded.Close, contentDescription = "Close Menu", tint = Color(0xFF94A3B8))
+                            }
+                        }
                     }
 
-                    Button(
-                        onClick = {
-                            triggerHaptic()
-                            sendAction(
-                                JSONObject().apply {
-                                    put("type", "mouse_click")
-                                    put("button", "left")
-                                    put("clicks", 2)
-                                }
-                            )
-                        },
+                    // Telemetry Card
+                    Row(
                         modifier = Modifier
-                            .weight(0.9f)
-                            .height(52.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF475569))
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(Color(0xFF1E293B))
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("2x Click", color = Color.White, fontWeight = FontWeight.Bold)
+                        Text(
+                            text = "⚡ $currentFps FPS",
+                            color = if (currentFps >= 25) Color(0xFF34D399) else Color(0xFFFBBF24),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp
+                        )
+                        Text(
+                            text = frameResolution,
+                            color = Color(0xFF94A3B8),
+                            fontSize = 12.sp
+                        )
+                        Text(
+                            text = targetIp,
+                            color = Color(0xFF38BDF8),
+                            fontSize = 11.sp
+                        )
                     }
 
-                    Button(
-                        onClick = {
-                            triggerHaptic()
-                            sendAction(
-                                JSONObject().apply {
-                                    put("type", "mouse_click")
-                                    put("button", "right")
-                                }
-                            )
-                        },
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(52.dp),
-                        shape = RoundedCornerShape(16.dp),
-                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155))
+                    // Main Quick Tools Grid
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Text("Right Click", color = Color.White, fontWeight = FontWeight.Bold)
+                        // Keyboard Button
+                        Button(
+                            onClick = {
+                                triggerHaptic()
+                                showKeyboardSheet = true
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(46.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6366F1))
+                        ) {
+                            Icon(Icons.Rounded.Keyboard, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Keyboard", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+
+                        // Audio Toggle Button
+                        Button(
+                            onClick = {
+                                triggerHaptic()
+                                toggleAudio()
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(46.dp),
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = if (isAudioPlaying) Color(0xFF10B981) else Color(0xFF334155)
+                            )
+                        ) {
+                            Icon(
+                                if (isAudioPlaying) Icons.AutoMirrored.Rounded.VolumeUp else Icons.AutoMirrored.Rounded.VolumeMute,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(if (isAudioPlaying) "Audio ON" else "Audio OFF", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+
+                    // Direct Text Typing Input
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = typedText,
+                            onValueChange = { typedText = it },
+                            placeholder = { Text("Type text to PC...", fontSize = 12.sp, color = Color(0xFF64748B)) },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Color(0xFF6366F1),
+                                unfocusedBorderColor = Color(0xFF334155),
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White
+                            )
+                        )
+                        IconButton(
+                            onClick = {
+                                if (typedText.isNotEmpty()) {
+                                    triggerHaptic()
+                                    sendAction(JSONObject().apply {
+                                        put("type", "type_text")
+                                        put("text", typedText)
+                                    })
+                                    typedText = ""
+                                }
+                            },
+                            modifier = Modifier
+                                .size(48.dp)
+                                .background(Color(0xFF6366F1), RoundedCornerShape(12.dp))
+                        ) {
+                            Icon(Icons.Rounded.Send, contentDescription = "Send Text", tint = Color.White)
+                        }
+                    }
+
+                    // Windows Special Keys & Shortcuts Row
+                    Text("Windows Shortcuts", color = Color(0xFF94A3B8), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                            KeyPill(label = "⊞ Win", modifier = Modifier.weight(1f)) {
+                                triggerHaptic()
+                                sendAction(JSONObject().apply { put("type", "key_press"); put("key", "win") })
+                            }
+                            KeyPill(label = "Esc", modifier = Modifier.weight(1f)) {
+                                triggerHaptic()
+                                sendAction(JSONObject().apply { put("type", "key_press"); put("key", "esc") })
+                            }
+                            KeyPill(label = "Tab", modifier = Modifier.weight(1f)) {
+                                triggerHaptic()
+                                sendAction(JSONObject().apply { put("type", "key_press"); put("key", "tab") })
+                            }
+                            KeyPill(label = "Enter", modifier = Modifier.weight(1f)) {
+                                triggerHaptic()
+                                sendAction(JSONObject().apply { put("type", "key_press"); put("key", "enter") })
+                            }
+                        }
+
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+                            ShortcutPill(label = "⊞ Win+D", modifier = Modifier.weight(1f)) {
+                                triggerHaptic()
+                                sendAction(JSONObject().apply { put("type", "hotkey"); put("keys", JSONArray().apply { put("win"); put("d") }) })
+                            }
+                            ShortcutPill(label = "Alt+Tab", modifier = Modifier.weight(1f)) {
+                                triggerHaptic()
+                                sendAction(JSONObject().apply { put("type", "hotkey"); put("keys", JSONArray().apply { put("alt"); put("tab") }) })
+                            }
+                            ShortcutPill(label = "TaskMgr", modifier = Modifier.weight(1f)) {
+                                triggerHaptic()
+                                sendAction(JSONObject().apply { put("type", "hotkey"); put("keys", JSONArray().apply { put("ctrl"); put("shift"); put("esc") }) })
+                            }
+                        }
+                    }
+
+                    // FPS & Quality Presets
+                    Text("Quality & FPS Preset", color = Color(0xFF94A3B8), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        PresetChip(
+                            label = "35 FPS",
+                            subLabel = "Balanced",
+                            isSelected = selectedFps == 35,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            triggerHaptic()
+                            selectedFps = 35
+                            selectedQuality = 55
+                            selectedScale = 0.85f
+                            sendAction(JSONObject().apply {
+                                put("type", "set_quality")
+                                put("fps", 35)
+                                put("quality", 55)
+                                put("scale", 0.85)
+                            })
+                        }
+
+                        PresetChip(
+                            label = "60 FPS",
+                            subLabel = "Ultra Fast",
+                            isSelected = selectedFps == 60,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            triggerHaptic()
+                            selectedFps = 60
+                            selectedQuality = 50
+                            selectedScale = 0.75f
+                            sendAction(JSONObject().apply {
+                                put("type", "set_quality")
+                                put("fps", 60)
+                                put("quality", 50)
+                                put("scale", 0.75)
+                            })
+                        }
+                    }
+
+                    // Clipboard & Monitor Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                triggerHaptic()
+                                sendAction(JSONObject().apply { put("type", "clipboard_get") })
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF334155))
+                        ) {
+                            Icon(Icons.Rounded.ContentPaste, contentDescription = null, tint = Color(0xFFFBBF24), modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Copy PC Clip", fontSize = 11.sp, color = Color.White)
+                        }
+
+                        if (monitors.size > 1) {
+                            OutlinedButton(
+                                onClick = {
+                                    triggerHaptic()
+                                    val nextMon = if (selectedMonitorId >= monitors.size) 1 else selectedMonitorId + 1
+                                    selectedMonitorId = nextMon
+                                    sendAction(JSONObject().apply {
+                                        put("type", "set_monitor")
+                                        put("monitor", nextMon)
+                                    })
+                                    Toast.makeText(context, "Display $nextMon", Toast.LENGTH_SHORT).show()
+                                },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(10.dp),
+                                border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF334155))
+                            ) {
+                                Icon(Icons.Rounded.Monitor, contentDescription = null, tint = Color(0xFF38BDF8), modifier = Modifier.size(16.dp))
+                                Spacer(Modifier.width(6.dp))
+                                Text("Display $selectedMonitorId", fontSize = 11.sp, color = Color.White)
+                            }
+                        }
                     }
                 }
             }
@@ -695,241 +884,105 @@ fun RemoteDesktopScreen(
         if (showKeyboardSheet) {
             ModalBottomSheet(
                 onDismissRequest = { showKeyboardSheet = false },
-                containerColor = Color(0xFF1E293B),
+                containerColor = Color(0xFF0F172A),
                 dragHandle = { BottomSheetDefaults.DragHandle(color = Color(0xFF64748B)) }
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp, vertical = 8.dp)
-                        .navigationBarsPadding(),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                        .padding(bottom = 24.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    // Header & Text Send Box
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        OutlinedTextField(
-                            value = typedText,
-                            onValueChange = { typedText = it },
-                            placeholder = { Text("Type text to type on PC...", color = Color(0xFF64748B), fontSize = 13.sp) },
-                            singleLine = true,
-                            modifier = Modifier.weight(1f),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedTextColor = Color.White,
-                                unfocusedTextColor = Color.White,
-                                focusedBorderColor = Color(0xFF6366F1),
-                                unfocusedBorderColor = Color(0xFF334155)
-                            )
-                        )
-
-                        Button(
-                            onClick = {
-                                if (typedText.isNotEmpty()) {
-                                    triggerHaptic()
-                                    sendAction(
-                                        JSONObject().apply {
-                                            put("type", "text_input")
-                                            put("text", typedText)
-                                        }
-                                    )
-                                    typedText = ""
-                                }
-                            },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6366F1)),
-                            shape = RoundedCornerShape(12.dp)
-                        ) {
-                            Text("Send", fontWeight = FontWeight.Bold)
-                        }
-                    }
+                    Text(
+                        text = "Windows Virtual Keyboard",
+                        color = Color.White,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold
+                    )
 
                     // Windows Special Keys Row 1
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        listOf("esc", "tab", "win", "ctrl", "alt", "shift").forEach { key ->
-                            KeyPill(
-                                label = key.uppercase(),
-                                modifier = Modifier.weight(1f),
-                                onClick = {
-                                    triggerHaptic()
-                                    sendAction(JSONObject().apply { put("type", "key_press"); put("key", key) })
-                                }
-                            )
+                        KeyPill(label = "Esc", modifier = Modifier.weight(1f)) {
+                            triggerHaptic()
+                            sendAction(JSONObject().apply { put("type", "key_press"); put("key", "esc") })
+                        }
+                        KeyPill(label = "Tab", modifier = Modifier.weight(1f)) {
+                            triggerHaptic()
+                            sendAction(JSONObject().apply { put("type", "key_press"); put("key", "tab") })
+                        }
+                        KeyPill(label = "Ctrl", modifier = Modifier.weight(1f)) {
+                            triggerHaptic()
+                            sendAction(JSONObject().apply { put("type", "key_press"); put("key", "ctrl") })
+                        }
+                        KeyPill(label = "Alt", modifier = Modifier.weight(1f)) {
+                            triggerHaptic()
+                            sendAction(JSONObject().apply { put("type", "key_press"); put("key", "alt") })
+                        }
+                        KeyPill(label = "Shift", modifier = Modifier.weight(1f)) {
+                            triggerHaptic()
+                            sendAction(JSONObject().apply { put("type", "key_press"); put("key", "shift") })
+                        }
+                        KeyPill(label = "⊞ Win", modifier = Modifier.weight(1f)) {
+                            triggerHaptic()
+                            sendAction(JSONObject().apply { put("type", "key_press"); put("key", "win") })
                         }
                     }
 
-                    // Windows Shortcuts Row 2
+                    // Windows Navigation Row 2
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
-                        ShortcutPill(
-                            label = "Alt+Tab",
-                            modifier = Modifier.weight(1.2f),
-                            onClick = {
-                                triggerHaptic()
-                                sendAction(JSONObject().apply { put("type", "hotkey"); put("keys", JSONArray().put("alt").put("tab")) })
-                            }
-                        )
-                        ShortcutPill(
-                            label = "Win+D",
-                            modifier = Modifier.weight(1f),
-                            onClick = {
-                                triggerHaptic()
-                                sendAction(JSONObject().apply { put("type", "hotkey"); put("keys", JSONArray().put("win").put("d")) })
-                            }
-                        )
-                        ShortcutPill(
-                            label = "TaskMgr",
-                            modifier = Modifier.weight(1.3f),
-                            onClick = {
-                                triggerHaptic()
-                                sendAction(JSONObject().apply { put("type", "hotkey"); put("keys", JSONArray().put("ctrl").put("shift").put("esc")) })
-                            }
-                        )
-                        KeyPill(
-                            label = "DEL",
-                            modifier = Modifier.weight(1f),
-                            onClick = {
-                                triggerHaptic()
-                                sendAction(JSONObject().apply { put("type", "key_press"); put("key", "del") })
-                            }
-                        )
-                        KeyPill(
-                            label = "ENTER",
-                            modifier = Modifier.weight(1.2f),
-                            onClick = {
-                                triggerHaptic()
-                                sendAction(JSONObject().apply { put("type", "key_press"); put("key", "enter") })
-                            }
-                        )
+                        KeyPill(label = "Backspace", modifier = Modifier.weight(1.5f)) {
+                            triggerHaptic()
+                            sendAction(JSONObject().apply { put("type", "key_press"); put("key", "backspace") })
+                        }
+                        KeyPill(label = "Delete", modifier = Modifier.weight(1.2f)) {
+                            triggerHaptic()
+                            sendAction(JSONObject().apply { put("type", "key_press"); put("key", "delete") })
+                        }
+                        KeyPill(label = "Enter", modifier = Modifier.weight(1.5f)) {
+                            triggerHaptic()
+                            sendAction(JSONObject().apply { put("type", "key_press"); put("key", "enter") })
+                        }
+                        KeyPill(label = "Space", modifier = Modifier.weight(2f)) {
+                            triggerHaptic()
+                            sendAction(JSONObject().apply { put("type", "key_press"); put("key", "space") })
+                        }
                     }
 
-                    // Clipboard Sync Action Row 3
+                    // Windows Arrow Keys
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                        horizontalArrangement = Arrangement.Center
                     ) {
-                        Button(
-                            onClick = {
-                                triggerHaptic()
-                                val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                                val phoneClip = cm?.primaryClip?.getItemAt(0)?.text?.toString() ?: ""
-                                if (phoneClip.isNotEmpty()) {
-                                    sendAction(JSONObject().apply { put("type", "clipboard_set"); put("text", phoneClip) })
-                                    Toast.makeText(context, "Sent phone clipboard to PC", Toast.LENGTH_SHORT).show()
-                                } else {
-                                    Toast.makeText(context, "Phone clipboard is empty", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155))
-                        ) {
-                            Icon(Icons.Rounded.ContentPaste, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Paste to PC", fontSize = 12.sp)
+                        KeyPill(label = "◀", modifier = Modifier.width(60.dp)) {
+                            triggerHaptic()
+                            sendAction(JSONObject().apply { put("type", "key_press"); put("key", "left") })
                         }
-
-                        Button(
-                            onClick = {
+                        Spacer(Modifier.width(6.dp))
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            KeyPill(label = "▲", modifier = Modifier.width(60.dp)) {
                                 triggerHaptic()
-                                sendAction(JSONObject().apply { put("type", "clipboard_get") })
-                            },
-                            modifier = Modifier.weight(1f),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF334155))
-                        ) {
-                            Icon(Icons.Rounded.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Copy from PC", fontSize = 12.sp)
+                                sendAction(JSONObject().apply { put("type", "key_press"); put("key", "up") })
+                            }
+                            KeyPill(label = "▼", modifier = Modifier.width(60.dp)) {
+                                triggerHaptic()
+                                sendAction(JSONObject().apply { put("type", "key_press"); put("key", "down") })
+                            }
+                        }
+                        Spacer(Modifier.width(6.dp))
+                        KeyPill(label = "▶", modifier = Modifier.width(60.dp)) {
+                            triggerHaptic()
+                            sendAction(JSONObject().apply { put("type", "key_press"); put("key", "right") })
                         }
                     }
-
-                    Spacer(Modifier.height(8.dp))
                 }
             }
-        }
-
-        // ---------------------------------------------------------------------
-        // Quality & FPS Settings Dialog
-        // ---------------------------------------------------------------------
-        if (showQualityDialog) {
-            AlertDialog(
-                onDismissRequest = { showQualityDialog = false },
-                containerColor = Color(0xFF1E293B),
-                title = {
-                    Text("Stream Quality & Performance", color = Color.White, fontWeight = FontWeight.Bold, fontSize = 18.sp)
-                },
-                text = {
-                    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
-                        Text("Select preset streaming profile:", color = Color(0xFF94A3B8), fontSize = 13.sp)
-
-                        QualityOption(
-                            title = "Smooth (60 FPS, 1080p)",
-                            subtitle = "Best for fast Wi-Fi networks (High Quality)",
-                            isSelected = selectedFps == 60,
-                            onClick = {
-                                selectedFps = 60
-                                selectedQuality = 75
-                                selectedScale = 0.9f
-                                sendAction(JSONObject().apply {
-                                    put("type", "set_quality")
-                                    put("fps", 60)
-                                    put("quality", 75)
-                                    put("scale", 0.9)
-                                })
-                                showQualityDialog = false
-                            }
-                        )
-
-                        QualityOption(
-                            title = "Balanced (30 FPS, 720p)",
-                            subtitle = "Recommended for optimal battery & latency",
-                            isSelected = selectedFps == 30,
-                            onClick = {
-                                selectedFps = 30
-                                selectedQuality = 65
-                                selectedScale = 0.75f
-                                sendAction(JSONObject().apply {
-                                    put("type", "set_quality")
-                                    put("fps", 30)
-                                    put("quality", 65)
-                                    put("scale", 0.75)
-                                })
-                                showQualityDialog = false
-                            }
-                        )
-
-                        QualityOption(
-                            title = "Eco (20 FPS, 540p)",
-                            subtitle = "Lowest network bandwidth & minimal lag",
-                            isSelected = selectedFps == 20,
-                            onClick = {
-                                selectedFps = 20
-                                selectedQuality = 50
-                                selectedScale = 0.5f
-                                sendAction(JSONObject().apply {
-                                    put("type", "set_quality")
-                                    put("fps", 20)
-                                    put("quality", 50)
-                                    put("scale", 0.5)
-                                })
-                                showQualityDialog = false
-                            }
-                        )
-                    }
-                },
-                confirmButton = {
-                    TextButton(onClick = { showQualityDialog = false }) {
-                        Text("Close", color = Color(0xFF6366F1), fontWeight = FontWeight.Bold)
-                    }
-                }
-            )
         }
     }
 }
@@ -982,32 +1035,25 @@ fun ShortcutPill(
 }
 
 @Composable
-fun QualityOption(
-    title: String,
-    subtitle: String,
+fun PresetChip(
+    label: String,
+    subLabel: String,
     isSelected: Boolean,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(if (isSelected) Color(0xFF6366F1).copy(alpha = 0.2f) else Color(0xFF334155).copy(alpha = 0.4f))
-            .border(
-                1.dp,
-                if (isSelected) Color(0xFF6366F1) else Color(0xFF334155),
-                RoundedCornerShape(12.dp)
-            )
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(10.dp))
+            .background(if (isSelected) Color(0xFF6366F1).copy(alpha = 0.25f) else Color(0xFF1E293B))
+            .border(1.dp, if (isSelected) Color(0xFF6366F1) else Color(0xFF334155), RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
-            .padding(12.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(vertical = 8.dp),
+        contentAlignment = Alignment.Center
     ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text(title, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-            Text(subtitle, color = Color(0xFF94A3B8), fontSize = 11.sp)
-        }
-        if (isSelected) {
-            Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = Color(0xFF6366F1), modifier = Modifier.size(20.dp))
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(label, color = if (isSelected) Color(0xFF818CF8) else Color.White, fontWeight = FontWeight.Bold, fontSize = 12.sp)
+            Text(subLabel, color = Color(0xFF94A3B8), fontSize = 10.sp)
         }
     }
 }

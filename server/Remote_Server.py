@@ -1098,9 +1098,9 @@ async def ws_remote_desktop(websocket: WebSocket, password: str | None = Query(d
 
     settings = {
         "monitor": 1,
-        "quality": 65,
-        "scale": 0.75,
-        "fps": 30,
+        "quality": 55,
+        "scale": 0.85,
+        "fps": 35,
         "active": True
     }
 
