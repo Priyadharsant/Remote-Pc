@@ -17,6 +17,7 @@ import { checkForAppUpdates } from './version';
 import type { AppUpdateData } from './version';
 import { api } from './api';
 import type { ServerStatus, SystemStats, PairingRequest } from './types';
+import { Download, RefreshCw, CheckCircle, AlertCircle } from 'lucide-react';
 
 export function App() {
   const [activeTab, setActiveTab] = useState<TabKey>('server');
@@ -80,8 +81,106 @@ export function App() {
 
   const isConfigured = status?.is_configured !== false;
 
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
+  const [transferStatus, setTransferStatus] = useState<{ active: boolean; message: string; type: 'info' | 'success' | 'error' } | null>(null);
+
+  const activeClientIp = status?.clients && status.clients.length > 0 ? status.clients[0].ip : '127.0.0.1';
+  const hasConnectedPhone = Boolean(connectedClient);
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer.types.includes('Files')) {
+      setIsDraggingOver(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+    setIsDraggingOver(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingOver(false);
+
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length === 0) return;
+
+    if (!hasConnectedPhone) {
+      setTransferStatus({
+        active: true,
+        message: 'No mobile device connected. Connect your phone first to transfer files.',
+        type: 'error'
+      });
+      setTimeout(() => setTransferStatus(null), 4000);
+      return;
+    }
+
+    setTransferStatus({
+      active: true,
+      message: `Sending ${files.length} file${files.length > 1 ? 's' : ''} to ${connectedClient}...`,
+      type: 'info'
+    });
+
+    let successCount = 0;
+    for (const file of files) {
+      try {
+        let filePath = '';
+        if (window.electronAPI?.getPathForFile) {
+          filePath = window.electronAPI.getPathForFile(file);
+        }
+        if (!filePath) {
+          filePath = (file as any).path || '';
+        }
+
+        if (filePath && window.electronAPI?.uploadFileToPhone) {
+          await window.electronAPI.uploadFileToPhone({
+            phoneIp: activeClientIp,
+            filePath,
+            fileName: file.name
+          });
+          successCount++;
+        } else if (window.electronAPI?.uploadFileToPhone) {
+          const buffer = await file.arrayBuffer();
+          await window.electronAPI.uploadFileToPhone({
+            phoneIp: activeClientIp,
+            fileName: file.name,
+            fileBuffer: buffer
+          });
+          successCount++;
+        }
+      } catch (err: any) {
+        console.error('File transfer failed:', err);
+      }
+    }
+
+    if (successCount > 0) {
+      setTransferStatus({
+        active: true,
+        message: `✓ Saved ${successCount} file${successCount > 1 ? 's' : ''} to ${connectedClient}'s Downloads/RemotePC`,
+        type: 'success'
+      });
+    } else {
+      setTransferStatus({
+        active: true,
+        message: `File transfer failed. Ensure Remote PC app is running on phone.`,
+        type: 'error'
+      });
+    }
+    setTimeout(() => setTransferStatus(null), 5000);
+  };
+
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-[#0B0F19] text-slate-100 select-none">
+    <div
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      className="relative flex flex-col h-screen w-screen overflow-hidden bg-[#0B0F19] text-slate-100 select-none"
+    >
       {/* PC Setup Wizard for Fresh Install / Unconfigured Server */}
       {isOnline && !isConfigured && (
         <SetupWizard defaultName={status?.name} onComplete={fetchAllData} />
@@ -178,6 +277,37 @@ export function App() {
         onClose={() => setUpdateModalOpen(false)}
         initialUpdateData={updateData}
       />
+
+      {/* Full-Window Smooth Drag-and-Drop Overlay */}
+      {isDraggingOver && (
+        <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-slate-950/85 backdrop-blur-md border-4 border-dashed border-cyan-400 pointer-events-none animate-in fade-in zoom-in-95 duration-200">
+          <div className="p-8 rounded-3xl bg-cyan-500/15 border border-cyan-400/40 text-cyan-300 shadow-2xl flex flex-col items-center gap-4 text-center max-w-md mx-4">
+            <div className="p-4 rounded-2xl bg-cyan-500/20 text-cyan-400 animate-bounce">
+              <Download size={48} />
+            </div>
+            <div className="text-2xl font-black text-white tracking-wide">Drop to Save on Mobile</div>
+            <p className="text-sm text-cyan-200/90 leading-relaxed">
+              Files will be saved automatically into {connectedClient ? <span className="font-bold text-white">{connectedClient}'s</span> : "phone's"} <span className="font-semibold text-cyan-300 underline decoration-cyan-500/50">Downloads/RemotePC</span>
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Floating Transfer Status Toast Banner */}
+      {transferStatus && (
+        <div className={`fixed bottom-6 right-6 z-50 flex items-center gap-3 px-5 py-3.5 rounded-2xl shadow-2xl border backdrop-blur-xl animate-in slide-in-from-bottom-5 duration-200 ${
+          transferStatus.type === 'success'
+            ? 'bg-emerald-950/95 border-emerald-500/40 text-emerald-200 shadow-emerald-500/20'
+            : transferStatus.type === 'error'
+            ? 'bg-rose-950/95 border-rose-500/40 text-rose-200 shadow-rose-500/20'
+            : 'bg-slate-900/95 border-cyan-500/40 text-cyan-200 shadow-cyan-500/20'
+        }`}>
+          {transferStatus.type === 'info' && <RefreshCw size={18} className="animate-spin text-cyan-400" />}
+          {transferStatus.type === 'success' && <CheckCircle size={18} className="text-emerald-400" />}
+          {transferStatus.type === 'error' && <AlertCircle size={18} className="text-rose-400" />}
+          <span className="text-xs font-bold">{transferStatus.message}</span>
+        </div>
+      )}
     </div>
   );
 }

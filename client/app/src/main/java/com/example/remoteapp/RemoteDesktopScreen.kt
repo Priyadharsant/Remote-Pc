@@ -5,10 +5,18 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.pm.ActivityInfo
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.AudioAttributes
-import android.media.MediaPlayer
+import android.media.AudioFormat
+import android.media.AudioTrack
+import java.net.HttpURLConnection
+import java.net.URL
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.withContext
 import android.os.Build
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -30,6 +38,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.Send
 import androidx.compose.material.icons.automirrored.rounded.VolumeMute
 import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.*
@@ -42,6 +51,8 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.scale
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -64,11 +75,11 @@ import okhttp3.WebSocketListener
 import okio.ByteString
 import org.json.JSONArray
 import org.json.JSONObject
-import java.io.File
 import java.net.URLEncoder
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.TimeUnit
+import kotlin.math.abs
 
 data class MonitorInfo(
     val id: Int,
@@ -77,6 +88,11 @@ data class MonitorInfo(
     val height: Int,
     val isPrimary: Boolean
 )
+
+enum class TouchInteractionStyle {
+    MOBILE_SCROLL, // Single finger swipe scrolls like a phone, tap clicks, long press right-clicks
+    DRAG_SELECT    // Single finger drag holds left click (drags windows, highlights text)
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -88,22 +104,33 @@ fun RemoteDesktopScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
-    // 1. Force Landscape on Enter, Restore Previous on Exit
+    val handleBack: () -> Unit = {
+        (context as? Activity)?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        onBack()
+    }
+
+    // 1. Force Landscape & Fullscreen on Enter, Explicitly Restore Portrait on Exit
     DisposableEffect(Unit) {
         val activity = context as? Activity
-        val previousOrientation = activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        val window = activity?.window
+        val insetsController = window?.let { WindowCompat.getInsetsController(it, it.decorView) }
+
         activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+        insetsController?.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        insetsController?.hide(WindowInsetsCompat.Type.systemBars())
+
         onDispose {
-            activity?.requestedOrientation = previousOrientation
+            activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            insetsController?.show(WindowInsetsCompat.Type.systemBars())
         }
     }
 
     // Intercept hardware/gesture Back button
     BackHandler {
-        onBack()
+        handleBack()
     }
 
-    // Live Frame and Connection State
+    // Connection & Frame State
     var isConnected by remember { mutableStateOf(false) }
     var connectionError by remember { mutableStateOf<String?>(null) }
     var reconnectTrigger by remember { mutableIntStateOf(0) }
@@ -111,18 +138,22 @@ fun RemoteDesktopScreen(
     var monitors by remember { mutableStateOf<List<MonitorInfo>>(emptyList()) }
     var selectedMonitorId by remember { mutableIntStateOf(1) }
 
-    // Stream Presets (High performance defaults: 35 FPS, 55 quality, 0.8 scale)
-    var selectedFps by remember { mutableIntStateOf(35) }
-    var selectedQuality by remember { mutableIntStateOf(55) }
-    var selectedScale by remember { mutableFloatStateOf(0.85f) }
+    // Stream Presets (Crisp 45 FPS, 60 quality, 0.9 scale)
+    var selectedFps by remember { mutableIntStateOf(45) }
+    var selectedQuality by remember { mutableIntStateOf(60) }
+    var selectedScale by remember { mutableFloatStateOf(0.9f) }
+
+    // Touch interaction mode
+    var touchStyle by remember { mutableStateOf(TouchInteractionStyle.MOBILE_SCROLL) }
 
     // Live Metrics
     var fpsCounter by remember { mutableIntStateOf(0) }
     var currentFps by remember { mutableIntStateOf(0) }
     var frameResolution by remember { mutableStateOf("1920x1080") }
 
-    // Side Drawer / Flyout Menu & Panels
-    var showSideMenu by remember { mutableStateOf(false) }
+    // Side Navigation & Tool Drawers
+    var showQuickNav by remember { mutableStateOf(true) }
+    var showFullDrawer by remember { mutableStateOf(false) }
     var showKeyboardSheet by remember { mutableStateOf(false) }
     var isAudioPlaying by remember { mutableStateOf(false) }
     var typedText by remember { mutableStateOf("") }
@@ -134,9 +165,14 @@ fun RemoteDesktopScreen(
     var dstWidth by remember { mutableFloatStateOf(0f) }
     var dstHeight by remember { mutableFloatStateOf(0f) }
 
-    // WebSocket Reference & Media Player
+    // Zoom & Pan
+    var zoomScale by remember { mutableFloatStateOf(1.0f) }
+    var panOffset by remember { mutableStateOf(Offset.Zero) }
+
+    // WebSocket Reference & AudioTrack Reference
     var webSocketRef by remember { mutableStateOf<WebSocket?>(null) }
-    var mediaPlayerRef by remember { mutableStateOf<MediaPlayer?>(null) }
+    var audioJob by remember { mutableStateOf<Job?>(null) }
+    var audioTrackRef by remember { mutableStateOf<AudioTrack?>(null) }
 
     // Haptic feedback helper
     val triggerHaptic: () -> Unit = {
@@ -152,40 +188,99 @@ fun RemoteDesktopScreen(
         } catch (_: Exception) {}
     }
 
-    // Audio stream toggle helper
+    // Audio stream helper using low-latency AudioTrack
+    val stopAudio: () -> Unit = {
+        audioJob?.cancel()
+        audioJob = null
+        try {
+            audioTrackRef?.stop()
+            audioTrackRef?.release()
+        } catch (_: Exception) {}
+        audioTrackRef = null
+        isAudioPlaying = false
+    }
+
     val toggleAudio: () -> Unit = {
         if (isAudioPlaying) {
-            mediaPlayerRef?.stop()
-            mediaPlayerRef?.release()
-            mediaPlayerRef = null
-            isAudioPlaying = false
-            Toast.makeText(context, "PC Audio muted", Toast.LENGTH_SHORT).show()
+            stopAudio()
         } else {
-            try {
-                val audioUrl = "http://$targetIp:5055/audio/stream"
-                val mp = MediaPlayer().apply {
-                    setAudioAttributes(
-                        AudioAttributes.Builder()
-                            .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
-                            .setUsage(AudioAttributes.USAGE_MEDIA)
-                            .build()
+            stopAudio()
+            isAudioPlaying = true
+            val host = if (targetIp.contains(":")) targetIp.substringBefore(":") else targetIp
+            audioJob = coroutineScope.launch(Dispatchers.IO) {
+                var connection: HttpURLConnection? = null
+                var track: AudioTrack? = null
+                try {
+                    val url = URL("http://$host:5055/audio/stream")
+                    connection = (url.openConnection() as HttpURLConnection).apply {
+                        connectTimeout = 5000
+                        readTimeout = 10000
+                        doInput = true
+                        useCaches = false
+                    }
+                    connection.connect()
+
+                    val inputStream = connection.inputStream
+                    // Skip the 44-byte WAV header safely
+                    val headerBytes = ByteArray(44)
+                    var headerRead = 0
+                    while (headerRead < 44) {
+                        val r = inputStream.read(headerBytes, headerRead, 44 - headerRead)
+                        if (r == -1) break
+                        headerRead += r
+                    }
+
+                    val sampleRate = 44100
+                    val minBufSize = AudioTrack.getMinBufferSize(
+                        sampleRate,
+                        AudioFormat.CHANNEL_OUT_STEREO,
+                        AudioFormat.ENCODING_PCM_16BIT
                     )
-                    setDataSource(audioUrl)
-                    setOnPreparedListener {
-                        start()
-                        isAudioPlaying = true
-                        Toast.makeText(context, "🔊 PC Audio streaming live", Toast.LENGTH_SHORT).show()
+                    val bufferSize = minBufSize.coerceAtLeast(4096)
+
+                    track = AudioTrack.Builder()
+                        .setAudioAttributes(
+                            AudioAttributes.Builder()
+                                .setUsage(AudioAttributes.USAGE_MEDIA)
+                                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                                .build()
+                        )
+                        .setAudioFormat(
+                            AudioFormat.Builder()
+                                .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                                .setSampleRate(sampleRate)
+                                .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                                .build()
+                        )
+                        .setBufferSizeInBytes(bufferSize * 2)
+                        .setTransferMode(AudioTrack.MODE_STREAM)
+                        .build()
+
+                    audioTrackRef = track
+                    track.play()
+
+                    val buffer = ByteArray(2048)
+                    while (isActive) {
+                        val bytesRead = inputStream.read(buffer, 0, buffer.size)
+                        if (bytesRead == -1) break
+                        if (bytesRead > 0) {
+                            track.write(buffer, 0, bytesRead)
+                        }
                     }
-                    setOnErrorListener { _, _, _ ->
+                } catch (e: Exception) {
+                    Log.e("RemoteAudio", "Audio stream error: ${e.message}")
+                    withContext(Dispatchers.Main) {
                         isAudioPlaying = false
-                        Toast.makeText(context, "Could not start audio stream", Toast.LENGTH_SHORT).show()
-                        true
                     }
-                    prepareAsync()
+                } finally {
+                    try {
+                        track?.stop()
+                        track?.release()
+                    } catch (_: Exception) {}
+                    try {
+                        connection?.disconnect()
+                    } catch (_: Exception) {}
                 }
-                mediaPlayerRef = mp
-            } catch (e: Exception) {
-                Toast.makeText(context, "Audio error: ${e.message}", Toast.LENGTH_SHORT).show()
             }
         }
     }
@@ -210,7 +305,7 @@ fun RemoteDesktopScreen(
         }
     }
 
-    // Connect WebSocket with 15s timeout
+    // Connect WebSocket
     DisposableEffect(targetIp, password, reconnectTrigger) {
         val client = OkHttpClient.Builder()
             .readTimeout(0, TimeUnit.MILLISECONDS)
@@ -219,7 +314,9 @@ fun RemoteDesktopScreen(
             .build()
 
         val encodedPass = try { URLEncoder.encode(password, "UTF-8") } catch (_: Exception) { password }
-        val wsUrl = "ws://$targetIp:5055/ws/remote-desktop?password=$encodedPass&token=$encodedPass"
+        val host = if (targetIp.contains(":")) targetIp.substringBefore(":") else targetIp
+        val port = if (targetIp.contains(":")) targetIp.substringAfter(":") else "5055"
+        val wsUrl = "ws://$host:$port/ws/remote-desktop?password=$encodedPass&token=$encodedPass"
         val request = Request.Builder().url(wsUrl).build()
 
         val decodeOptions = BitmapFactory.Options().apply {
@@ -232,7 +329,7 @@ fun RemoteDesktopScreen(
                 connectionError = null
                 Log.d("RemoteDesktop", "Connected to Remote Desktop server")
 
-                // Immediately request configured FPS & quality
+                // Immediately configure FPS & quality
                 val configMsg = JSONObject().apply {
                     put("type", "set_quality")
                     put("fps", selectedFps)
@@ -296,7 +393,10 @@ fun RemoteDesktopScreen(
                         if (bmp != null) {
                             currentBitmap = bmp
                             fpsCounter++
-                            frameResolution = "${w}x${h}"
+                            val newRes = "${w}x${h}"
+                            if (frameResolution != newRes) {
+                                frameResolution = newRes
+                            }
                         }
                     }
                 }
@@ -304,7 +404,12 @@ fun RemoteDesktopScreen(
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 isConnected = false
-                connectionError = t.message ?: "Connection lost"
+                val msg = t.message ?: "Connection lost"
+                connectionError = if (msg.contains("404")) {
+                    "Remote Desktop service not responding on $host:$port. Ensure Remote PC server is running."
+                } else {
+                    msg
+                }
                 Log.e("RemoteDesktop", "WebSocket error: ${t.message}")
             }
 
@@ -317,9 +422,7 @@ fun RemoteDesktopScreen(
 
         onDispose {
             ws.cancel()
-            mediaPlayerRef?.stop()
-            mediaPlayerRef?.release()
-            mediaPlayerRef = null
+            stopAudio()
             webSocketRef = null
         }
     }
@@ -337,29 +440,31 @@ fun RemoteDesktopScreen(
         if (bmp != null) {
             val imageBitmap = remember(bmp) { bmp.asImageBitmap() }
 
-            // Calculate true laptop 16:9 aspect ratio letterbox fit
-            val canvasW = canvasSize.width.toFloat()
-            val canvasH = canvasSize.height.toFloat()
-            val imgW = imageBitmap.width.toFloat()
-            val imgH = imageBitmap.height.toFloat()
+            // Calculate true laptop 16:9 aspect ratio letterbox fit on layout changes
+            LaunchedEffect(canvasSize, imageBitmap.width, imageBitmap.height) {
+                val canvasW = canvasSize.width.toFloat()
+                val canvasH = canvasSize.height.toFloat()
+                val imgW = imageBitmap.width.toFloat()
+                val imgH = imageBitmap.height.toFloat()
 
-            if (canvasW > 0 && canvasH > 0 && imgW > 0 && imgH > 0) {
-                val scaleFactor = minOf(canvasW / imgW, canvasH / imgH)
-                val fitW = imgW * scaleFactor
-                val fitH = imgH * scaleFactor
-                dstLeft = (canvasW - fitW) / 2f
-                dstTop = (canvasH - fitH) / 2f
-                dstWidth = fitW
-                dstHeight = fitH
+                if (canvasW > 0 && canvasH > 0 && imgW > 0 && imgH > 0) {
+                    val scaleFactor = minOf(canvasW / imgW, canvasH / imgH)
+                    val fitW = imgW * scaleFactor
+                    val fitH = imgH * scaleFactor
+                    dstLeft = (canvasW - fitW) / 2f
+                    dstTop = (canvasH - fitH) / 2f
+                    dstWidth = fitW
+                    dstHeight = fitH
+                }
             }
 
-            // Real Touch Screen Pointer Input: Tap to click, double tap, hold right click, drag to drag, 2-finger scroll
+            // Real Touch Screen Pointer Input
             var lastTapTime by remember { mutableLongStateOf(0L) }
 
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .pointerInput(dstLeft, dstTop, dstWidth, dstHeight, selectedMonitorId) {
+                    .pointerInput(selectedMonitorId, touchStyle) {
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
                             val startPos = down.position
@@ -373,7 +478,9 @@ fun RemoteDesktopScreen(
 
                             var isDragging = false
                             var isLongPress = false
+                            var hasScrolled = false
                             val downTime = System.currentTimeMillis()
+                            var lastPos = startPos
 
                             val normX = ((startPos.x - dstLeft) / dstWidth).coerceIn(0f, 1f)
                             val normY = ((startPos.y - dstTop) / dstHeight).coerceIn(0f, 1f)
@@ -388,10 +495,13 @@ fun RemoteDesktopScreen(
                                 if (activePointers.size == 1) {
                                     val currentChange = activePointers[0]
                                     val currentPos = currentChange.position
-                                    val dist = (currentPos - startPos).getDistance()
+                                    val distFromStart = (currentPos - startPos).getDistance()
+                                    val deltaX = currentPos.x - lastPos.x
+                                    val deltaY = currentPos.y - lastPos.y
+                                    lastPos = currentPos
 
-                                    // Long press detection: held > 500ms without dragging -> Right Click
-                                    if (!isDragging && !isLongPress && System.currentTimeMillis() - downTime > 500 && dist < 20f) {
+                                    // Long press detection (> 500ms without movement) -> Right Click
+                                    if (!isDragging && !hasScrolled && !isLongPress && System.currentTimeMillis() - downTime > 500 && distFromStart < 15f) {
                                         isLongPress = true
                                         triggerHaptic()
                                         sendAction(JSONObject().apply {
@@ -403,41 +513,55 @@ fun RemoteDesktopScreen(
                                             put("monitor", selectedMonitorId)
                                         })
                                         currentChange.consume()
-                                    } else if (!isLongPress && dist > 14f) {
-                                        // Real touch drag: trigger mouse_down then stream mouse_move
-                                        if (!isDragging) {
-                                            isDragging = true
+                                    } else if (!isLongPress && distFromStart > 12f) {
+                                        if (touchStyle == TouchInteractionStyle.MOBILE_SCROLL) {
+                                            // Single finger mobile-style scroll!
+                                            hasScrolled = true
+                                            if (abs(deltaY) > 0.5f || abs(deltaX) > 0.5f) {
+                                                sendAction(JSONObject().apply {
+                                                    put("type", "mouse_scroll")
+                                                    // Swipe up scrolls page down (natural mobile scrolling)
+                                                    put("dy", (deltaY * 2.2).toDouble())
+                                                    put("dx", (-deltaX * 2.2).toDouble())
+                                                })
+                                                currentChange.consume()
+                                            }
+                                        } else {
+                                            // Drag & select mode
+                                            if (!isDragging) {
+                                                isDragging = true
+                                                sendAction(JSONObject().apply {
+                                                    put("type", "mouse_down")
+                                                    put("button", "left")
+                                                    put("x", normX.toDouble())
+                                                    put("y", normY.toDouble())
+                                                    put("is_normalized", true)
+                                                    put("monitor", selectedMonitorId)
+                                                })
+                                            }
+                                            val curNormX = ((currentPos.x - dstLeft) / dstWidth).coerceIn(0f, 1f)
+                                            val curNormY = ((currentPos.y - dstTop) / dstHeight).coerceIn(0f, 1f)
                                             sendAction(JSONObject().apply {
-                                                put("type", "mouse_down")
-                                                put("button", "left")
-                                                put("x", normX.toDouble())
-                                                put("y", normY.toDouble())
+                                                put("type", "mouse_move")
+                                                put("x", curNormX.toDouble())
+                                                put("y", curNormY.toDouble())
                                                 put("is_normalized", true)
                                                 put("monitor", selectedMonitorId)
                                             })
+                                            currentChange.consume()
                                         }
-                                        val curNormX = ((currentPos.x - dstLeft) / dstWidth).coerceIn(0f, 1f)
-                                        val curNormY = ((currentPos.y - dstTop) / dstHeight).coerceIn(0f, 1f)
-                                        sendAction(JSONObject().apply {
-                                            put("type", "mouse_move")
-                                            put("x", curNormX.toDouble())
-                                            put("y", curNormY.toDouble())
-                                            put("is_normalized", true)
-                                            put("monitor", selectedMonitorId)
-                                        })
-                                        currentChange.consume()
                                     }
                                 } else if (activePointers.size == 2) {
-                                    // Two-finger precision scroll wheel
+                                    // Two-finger pinch to zoom or two-finger scroll
                                     val p1 = activePointers[0]
                                     val p2 = activePointers[1]
                                     val dragY = (p1.position.y - p1.previousPosition.y + p2.position.y - p2.previousPosition.y) / 2f
                                     val dragX = (p1.position.x - p1.previousPosition.x + p2.position.x - p2.previousPosition.x) / 2f
-                                    if (Math.abs(dragY) > 2f || Math.abs(dragX) > 2f) {
+                                    if (abs(dragY) > 2f || abs(dragX) > 2f) {
                                         sendAction(JSONObject().apply {
                                             put("type", "mouse_scroll")
-                                            put("dy", (dragY * 1.6).toDouble())
-                                            put("dx", (-dragX * 1.6).toDouble())
+                                            put("dy", (dragY * 1.8).toDouble())
+                                            put("dx", (-dragX * 1.8).toDouble())
                                         })
                                         p1.consume()
                                         p2.consume()
@@ -452,7 +576,8 @@ fun RemoteDesktopScreen(
                                     put("button", "left")
                                     put("monitor", selectedMonitorId)
                                 })
-                            } else if (!isLongPress && System.currentTimeMillis() - downTime < 450) {
+                            } else if (!isLongPress && !hasScrolled && System.currentTimeMillis() - downTime < 400) {
+                                // Clean Tap -> Click
                                 triggerHaptic()
                                 val now = System.currentTimeMillis()
                                 val isDouble = (now - lastTapTime) < 320
@@ -472,11 +597,15 @@ fun RemoteDesktopScreen(
             ) {
                 // Canvas renders with zero distortion in laptop ratio
                 Canvas(modifier = Modifier.fillMaxSize()) {
-                    drawImage(
-                        image = imageBitmap,
-                        dstOffset = IntOffset(dstLeft.toInt(), dstTop.toInt()),
-                        dstSize = IntSize(dstWidth.toInt(), dstHeight.toInt())
-                    )
+                    translate(left = panOffset.x, top = panOffset.y) {
+                        scale(zoomScale, pivot = Offset.Zero) {
+                            drawImage(
+                                image = imageBitmap,
+                                dstOffset = IntOffset(dstLeft.toInt(), dstTop.toInt()),
+                                dstSize = IntSize(dstWidth.toInt(), dstHeight.toInt())
+                            )
+                        }
+                    }
                 }
             }
         } else {
@@ -542,48 +671,213 @@ fun RemoteDesktopScreen(
         }
 
         // ---------------------------------------------------------------------
-        // Floating Side Menu Edge Pill (Subtle, unobtrusive)
+        // Side Floating Navigation Rail (Easy 1-Tap Access on Right Edge)
         // ---------------------------------------------------------------------
-        if (!showSideMenu) {
+        if (showQuickNav && !showFullDrawer) {
             Box(
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
-                    .padding(end = 4.dp)
-                    .shadow(12.dp, RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
-                    .clip(RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
+                    .padding(end = 6.dp)
+                    .heightIn(max = 350.dp)
+                    .shadow(16.dp, RoundedCornerShape(20.dp))
+                    .clip(RoundedCornerShape(20.dp))
                     .background(Color(0xD90F172A))
-                    .border(1.dp, Color(0xFF334155), RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
-                    .clickable {
-                        triggerHaptic()
-                        showSideMenu = true
-                    }
-                    .padding(horizontal = 10.dp, vertical = 14.dp)
+                    .border(1.dp, Color(0xFF334155), RoundedCornerShape(20.dp))
+                    .padding(vertical = 6.dp, horizontal = 4.dp)
             ) {
                 Column(
+                    modifier = Modifier.verticalScroll(rememberScrollState()),
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
-                    Icon(
-                        imageVector = Icons.Rounded.Menu,
-                        contentDescription = "Open Remote Menu",
-                        tint = Color(0xFF38BDF8),
-                        modifier = Modifier.size(22.dp)
-                    )
-                    Text(
-                        text = "$currentFps",
-                        color = if (currentFps >= 25) Color(0xFF10B981) else Color(0xFFFBBF24),
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
-                    )
+                    // Back / Exit Button (Instant 1-Tap Navigation, Restores Portrait)
+                    IconButton(
+                        onClick = handleBack,
+                        modifier = Modifier.size(34.dp)
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Rounded.ArrowBack,
+                            contentDescription = "Exit Remote Desktop",
+                            tint = Color(0xFFEF4444),
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
+
+                    // 1-Tap Show Desktop (Win+D)
+                    IconButton(
+                        onClick = {
+                            triggerHaptic()
+                            sendAction(JSONObject().apply {
+                                put("type", "hotkey")
+                                put("keys", JSONArray().apply { put("win"); put("d") })
+                            })
+                        },
+                        modifier = Modifier.size(34.dp)
+                    ) {
+                        Icon(
+                            Icons.Rounded.DesktopWindows,
+                            contentDescription = "Show Desktop (Win+D)",
+                            tint = Color(0xFF38BDF8),
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
+
+                    // 1-Tap Switch App (Alt+Tab)
+                    IconButton(
+                        onClick = {
+                            triggerHaptic()
+                            sendAction(JSONObject().apply {
+                                put("type", "hotkey")
+                                put("keys", JSONArray().apply { put("alt"); put("tab") })
+                            })
+                        },
+                        modifier = Modifier.size(34.dp)
+                    ) {
+                        Icon(
+                            Icons.Rounded.Tab,
+                            contentDescription = "Switch App (Alt+Tab)",
+                            tint = Color(0xFFA78BFA),
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
+
+                    // 1-Tap Windows Start Menu (Win)
+                    IconButton(
+                        onClick = {
+                            triggerHaptic()
+                            sendAction(JSONObject().apply {
+                                put("type", "key_press")
+                                put("key", "win")
+                            })
+                        },
+                        modifier = Modifier.size(34.dp)
+                    ) {
+                        Icon(
+                            Icons.Rounded.Window,
+                            contentDescription = "Start Menu (Win)",
+                            tint = Color(0xFF818CF8),
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
+
+                    // 1-Tap Touch Mode Toggle (Scroll vs Drag)
+                    IconButton(
+                        onClick = {
+                            triggerHaptic()
+                            touchStyle = if (touchStyle == TouchInteractionStyle.MOBILE_SCROLL) {
+                                TouchInteractionStyle.DRAG_SELECT
+                            } else {
+                                TouchInteractionStyle.MOBILE_SCROLL
+                            }
+                        },
+                        modifier = Modifier
+                            .size(34.dp)
+                            .background(
+                                if (touchStyle == TouchInteractionStyle.MOBILE_SCROLL) Color(0xFF6366F1).copy(alpha = 0.3f) else Color(0xFF38BDF8).copy(alpha = 0.3f),
+                                CircleShape
+                            )
+                    ) {
+                        Icon(
+                            imageVector = if (touchStyle == TouchInteractionStyle.MOBILE_SCROLL) Icons.Rounded.TouchApp else Icons.Rounded.PanTool,
+                            contentDescription = "Touch / Scroll Mode",
+                            tint = if (touchStyle == TouchInteractionStyle.MOBILE_SCROLL) Color(0xFF818CF8) else Color(0xFF38BDF8),
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
+
+                    // 1-Tap Windows Keyboard Toggle
+                    IconButton(
+                        onClick = {
+                            triggerHaptic()
+                            showKeyboardSheet = true
+                        },
+                        modifier = Modifier.size(34.dp)
+                    ) {
+                        Icon(
+                            Icons.Rounded.Keyboard,
+                            contentDescription = "Windows Keyboard",
+                            tint = Color(0xFFA78BFA),
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
+
+                    // 1-Tap Audio Mute / Unmute
+                    IconButton(
+                        onClick = {
+                            triggerHaptic()
+                            toggleAudio()
+                        },
+                        modifier = Modifier
+                            .size(34.dp)
+                            .background(
+                                if (isAudioPlaying) Color(0xFF10B981).copy(alpha = 0.25f) else Color.Transparent,
+                                CircleShape
+                            )
+                    ) {
+                        Icon(
+                            imageVector = if (isAudioPlaying) Icons.AutoMirrored.Rounded.VolumeUp else Icons.AutoMirrored.Rounded.VolumeMute,
+                            contentDescription = "PC Audio",
+                            tint = if (isAudioPlaying) Color(0xFF34D399) else Color(0xFF94A3B8),
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
+
+                    // 1-Tap FPS Toggle (35 <-> 45 <-> 60 FPS)
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF1E293B))
+                            .clickable {
+                                triggerHaptic()
+                                selectedFps = when (selectedFps) {
+                                    35 -> 45
+                                    45 -> 60
+                                    else -> 35
+                                }
+                                selectedQuality = if (selectedFps == 60) 55 else 62
+                                selectedScale = if (selectedFps == 60) 0.85f else 0.95f
+                                sendAction(JSONObject().apply {
+                                    put("type", "set_quality")
+                                    put("fps", selectedFps)
+                                    put("quality", selectedQuality)
+                                    put("scale", selectedScale.toDouble())
+                                })
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "${currentFps.coerceAtLeast(1)}",
+                            color = if (currentFps >= 30) Color(0xFF10B981) else Color(0xFFFBBF24),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+
+                    // More Controls (Expands full drawer)
+                    IconButton(
+                        onClick = {
+                            triggerHaptic()
+                            showFullDrawer = true
+                        },
+                        modifier = Modifier.size(34.dp)
+                    ) {
+                        Icon(
+                            Icons.Rounded.MoreHoriz,
+                            contentDescription = "More Controls",
+                            tint = Color(0xFF94A3B8),
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
                 }
             }
         }
 
         // ---------------------------------------------------------------------
-        // Slide-in Flyout Side Menu Drawer (Appears only on click)
+        // Slide-in Extended Flyout Menu Drawer (When user taps More ⋯)
         // ---------------------------------------------------------------------
         AnimatedVisibility(
-            visible = showSideMenu,
+            visible = showFullDrawer,
             enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
             exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut(),
             modifier = Modifier.align(Alignment.CenterEnd)
@@ -593,7 +887,7 @@ fun RemoteDesktopScreen(
                     .fillMaxHeight()
                     .width(320.dp)
                     .shadow(24.dp, RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp))
-                    .background(Color(0xF50F172A))
+                    .background(Color(0xF80F172A))
                     .border(1.dp, Color(0xFF334155), RoundedCornerShape(topStart = 20.dp, bottomStart = 20.dp))
                     .padding(16.dp)
             ) {
@@ -617,7 +911,7 @@ fun RemoteDesktopScreen(
                             )
                             Spacer(Modifier.width(8.dp))
                             Text(
-                                text = "Remote Controls",
+                                text = "Desktop Controls",
                                 color = Color.White,
                                 fontSize = 16.sp,
                                 fontWeight = FontWeight.Bold
@@ -632,7 +926,7 @@ fun RemoteDesktopScreen(
                                 Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Exit", tint = Color(0xFFEF4444))
                             }
                             IconButton(
-                                onClick = { showSideMenu = false },
+                                onClick = { showFullDrawer = false },
                                 modifier = Modifier.size(32.dp)
                             ) {
                                 Icon(Icons.Rounded.Close, contentDescription = "Close Menu", tint = Color(0xFF94A3B8))
@@ -652,7 +946,7 @@ fun RemoteDesktopScreen(
                     ) {
                         Text(
                             text = "⚡ $currentFps FPS",
-                            color = if (currentFps >= 25) Color(0xFF34D399) else Color(0xFFFBBF24),
+                            color = if (currentFps >= 30) Color(0xFF34D399) else Color(0xFFFBBF24),
                             fontWeight = FontWeight.Bold,
                             fontSize = 12.sp
                         )
@@ -666,52 +960,6 @@ fun RemoteDesktopScreen(
                             color = Color(0xFF38BDF8),
                             fontSize = 11.sp
                         )
-                    }
-
-                    // Main Quick Tools Grid
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        // Keyboard Button
-                        Button(
-                            onClick = {
-                                triggerHaptic()
-                                showKeyboardSheet = true
-                            },
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(46.dp),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF6366F1))
-                        ) {
-                            Icon(Icons.Rounded.Keyboard, contentDescription = null, modifier = Modifier.size(16.dp))
-                            Spacer(Modifier.width(6.dp))
-                            Text("Keyboard", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
-
-                        // Audio Toggle Button
-                        Button(
-                            onClick = {
-                                triggerHaptic()
-                                toggleAudio()
-                            },
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(46.dp),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isAudioPlaying) Color(0xFF10B981) else Color(0xFF334155)
-                            )
-                        ) {
-                            Icon(
-                                if (isAudioPlaying) Icons.AutoMirrored.Rounded.VolumeUp else Icons.AutoMirrored.Rounded.VolumeMute,
-                                contentDescription = null,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(if (isAudioPlaying) "Audio ON" else "Audio OFF", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        }
                     }
 
                     // Direct Text Typing Input
@@ -748,7 +996,7 @@ fun RemoteDesktopScreen(
                                 .size(48.dp)
                                 .background(Color(0xFF6366F1), RoundedCornerShape(12.dp))
                         ) {
-                            Icon(Icons.Rounded.Send, contentDescription = "Send Text", tint = Color.White)
+                            Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = "Send Text", tint = Color.White)
                         }
                     }
 
@@ -804,13 +1052,31 @@ fun RemoteDesktopScreen(
                         ) {
                             triggerHaptic()
                             selectedFps = 35
-                            selectedQuality = 55
-                            selectedScale = 0.85f
+                            selectedQuality = 60
+                            selectedScale = 0.9f
                             sendAction(JSONObject().apply {
                                 put("type", "set_quality")
                                 put("fps", 35)
-                                put("quality", 55)
-                                put("scale", 0.85)
+                                put("quality", 60)
+                                put("scale", 0.9)
+                            })
+                        }
+
+                        PresetChip(
+                            label = "45 FPS",
+                            subLabel = "Smooth (HD)",
+                            isSelected = selectedFps == 45,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            triggerHaptic()
+                            selectedFps = 45
+                            selectedQuality = 62
+                            selectedScale = 0.95f
+                            sendAction(JSONObject().apply {
+                                put("type", "set_quality")
+                                put("fps", 45)
+                                put("quality", 62)
+                                put("scale", 0.95)
                             })
                         }
 
@@ -822,13 +1088,13 @@ fun RemoteDesktopScreen(
                         ) {
                             triggerHaptic()
                             selectedFps = 60
-                            selectedQuality = 50
-                            selectedScale = 0.75f
+                            selectedQuality = 55
+                            selectedScale = 0.85f
                             sendAction(JSONObject().apply {
                                 put("type", "set_quality")
                                 put("fps", 60)
-                                put("quality", 50)
-                                put("scale", 0.75)
+                                put("quality", 55)
+                                put("scale", 0.85)
                             })
                         }
                     }
@@ -862,7 +1128,6 @@ fun RemoteDesktopScreen(
                                         put("type", "set_monitor")
                                         put("monitor", nextMon)
                                     })
-                                    Toast.makeText(context, "Display $nextMon", Toast.LENGTH_SHORT).show()
                                 },
                                 modifier = Modifier.weight(1f),
                                 shape = RoundedCornerShape(10.dp),
@@ -1057,3 +1322,4 @@ fun PresetChip(
         }
     }
 }
+

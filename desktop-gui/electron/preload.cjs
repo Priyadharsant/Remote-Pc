@@ -1,4 +1,4 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
   // Window controls
@@ -17,6 +17,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Process & Tools
   launchScrcpy: (phoneIp) => ipcRenderer.invoke('tools:launch-scrcpy', phoneIp),
   startServer: () => ipcRenderer.invoke('server:start'),
+
+  // Drag & Drop File Transfer (PC <-> Mobile)
+  getPathForFile: (file) => {
+    try {
+      if (webUtils && typeof webUtils.getPathForFile === 'function') {
+        return webUtils.getPathForFile(file);
+      }
+    } catch (_) {}
+    return file?.path || '';
+  },
+  uploadFileToPhone: (data) => ipcRenderer.invoke('phone:upload-file', data),
+  startDragPhoneFile: (data) => ipcRenderer.send('phone:start-drag', data),
 
   // Auto-Updater (modeled after Finance Application)
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),

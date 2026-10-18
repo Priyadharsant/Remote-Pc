@@ -426,23 +426,53 @@ class MainActivity : FragmentActivity() {
         return "127.0.0.1"
     }
 
-    private fun isServerAlive(target: String): Boolean {
+    data class VerifiedServer(val name: String, val target: String, val ip: String)
+
+    private fun normalizeHost(hostOrTarget: String): String {
+        val host = if (hostOrTarget.contains(":")) hostOrTarget.substringBefore(":") else hostOrTarget
+        return host.trim().lowercase()
+    }
+
+    private fun normalizeDeviceName(name: String): String {
+        return name
+            .replace("-", " ")
+            .replace("_", " ")
+            .replace(".", " ")
+            .trim()
+            .lowercase()
+            .replace("\\s+".toRegex(), " ")
+    }
+
+    private fun verifyServer(target: String): VerifiedServer? {
         return try {
             val cleanTarget = getCleanTarget(target)
+            val hostOnly = normalizeHost(cleanTarget)
             val req = Request.Builder()
-                .url("http://$cleanTarget/")
+                .url("http://$cleanTarget/ping")
                 .get()
                 .build()
             val shortClient = client.newBuilder()
-                .connectTimeout(700, TimeUnit.MILLISECONDS)
-                .readTimeout(700, TimeUnit.MILLISECONDS)
+                .connectTimeout(750, TimeUnit.MILLISECONDS)
+                .readTimeout(750, TimeUnit.MILLISECONDS)
                 .build()
             shortClient.newCall(req).execute().use { resp ->
-                resp.isSuccessful || resp.code == 401 || resp.code == 403
+                if (resp.isSuccessful) {
+                    val body = resp.body?.string() ?: ""
+                    val json = JSONObject(body)
+                    if (json.optString("status") == "online" || json.has("server")) {
+                        val realName = json.optString("server", json.optString("name", "")).trim()
+                        val finalName = if (realName.isNotEmpty()) realName else "PC"
+                        VerifiedServer(finalName, cleanTarget, hostOnly)
+                    } else null
+                } else null
             }
-        } catch (e: Exception) {
-            false
+        } catch (_: Exception) {
+            null
         }
+    }
+
+    private fun isServerAlive(target: String): Boolean {
+        return verifyServer(target) != null
     }
 
     private fun startVideoServer() {
@@ -502,17 +532,33 @@ class MainActivity : FragmentActivity() {
         return list
     }
 
-    private fun discoverAllServers(onUpdate: (List<Pair<String, String>>) -> Unit) {
+    private fun discoverAllServers(
+        onUpdate: (List<Pair<String, String>>) -> Unit,
+        onScanningState: ((Boolean) -> Unit)? = null
+    ) {
         lifecycleScope.launch(Dispatchers.IO) {
+            withContext(Dispatchers.Main) {
+                onScanningState?.invoke(true)
+            }
             val localIps = getAllLocalIps()
-            val found = Collections.synchronizedMap(LinkedHashMap<String, Pair<String, String>>()) // Key: normalized IP
+            val found = Collections.synchronizedList(mutableListOf<Pair<String, String>>())
 
-            fun emitUnique() {
-                val uniqueList = found.values
-                    .distinctBy { it.first.trim().lowercase() } // Deduplicate by Hostname
-                    .toList()
+            fun emitDeduplicated() {
+                val list = synchronized(found) { found.toList() }
+                val unique = mutableListOf<Pair<String, String>>()
+                for (dev in list) {
+                    val normName = normalizeDeviceName(dev.first)
+                    val normIp = normalizeHost(dev.second)
+                    val alreadyAdded = unique.any { existing ->
+                        normalizeDeviceName(existing.first) == normName ||
+                        normalizeHost(existing.second) == normIp
+                    }
+                    if (!alreadyAdded) {
+                        unique.add(dev)
+                    }
+                }
                 lifecycleScope.launch(Dispatchers.Main) {
-                    onUpdate(uniqueList)
+                    onUpdate(unique)
                 }
             }
 
@@ -520,17 +566,42 @@ class MainActivity : FragmentActivity() {
                 onUpdate(emptyList())
             }
 
-            // Quick probe saved PC credentials if online and not self
+            // Quick probe saved PC credentials
             getSavedCredentials()?.let { saved ->
                 val savedTarget = saved.second
-                val savedIp = if (savedTarget.contains(":")) savedTarget.substringBefore(":") else savedTarget
-                val fullTarget = if (savedTarget.contains(":")) savedTarget else "$savedTarget:5055"
-                if (!localIps.contains(savedIp) && isServerAlive(fullTarget)) {
-                    found[savedIp] = Pair(saved.first, fullTarget)
-                    emitUnique()
+                val savedIp = normalizeHost(savedTarget)
+                if (!localIps.contains(savedIp)) {
+                    val verified = verifyServer(savedTarget)
+                    if (verified != null) {
+                        synchronized(found) {
+                            found.add(Pair(verified.name, verified.target))
+                        }
+                        emitDeduplicated()
+                    }
                 }
             }
 
+            // Also check SecureStorage target
+            val secIp = SecureStorage.getServerIp(this@MainActivity)
+            val secPort = SecureStorage.getServerPort(this@MainActivity)
+            if (secIp.isNotEmpty() && !localIps.contains(secIp)) {
+                val secTarget = "$secIp:$secPort"
+                val verified = verifyServer(secTarget)
+                if (verified != null) {
+                    synchronized(found) {
+                        val normName = normalizeDeviceName(verified.name)
+                        val normIp = normalizeHost(verified.target)
+                        found.removeAll { existing ->
+                            normalizeDeviceName(existing.first) == normName ||
+                            normalizeHost(existing.second) == normIp
+                        }
+                        found.add(Pair(verified.name, verified.target))
+                    }
+                    emitDeduplicated()
+                }
+            }
+
+            // UDP Broadcast Discovery
             var listenSocket: DatagramSocket? = null
             try {
                 listenSocket = DatagramSocket(9999).apply {
@@ -594,10 +665,18 @@ class MainActivity : FragmentActivity() {
                     if (name.isNullOrBlank()) continue
 
                     val target = "$senderIp:$port"
-                    // Check if the server is actually alive before adding
-                    if (isServerAlive(target)) {
-                        found[senderIp] = Pair(name, target)
-                        emitUnique()
+                    val verified = verifyServer(target)
+                    if (verified != null) {
+                        synchronized(found) {
+                            val normName = normalizeDeviceName(verified.name)
+                            val normIp = normalizeHost(verified.target)
+                            found.removeAll { existing ->
+                                normalizeDeviceName(existing.first) == normName ||
+                                normalizeHost(existing.second) == normIp
+                            }
+                            found.add(0, Pair(verified.name, verified.target))
+                        }
+                        emitDeduplicated()
                     }
                 } catch (e: SocketTimeoutException) {
                     // continue listening
@@ -606,7 +685,10 @@ class MainActivity : FragmentActivity() {
                 }
             }
             listenSocket?.close()
-            emitUnique()
+            emitDeduplicated()
+            withContext(Dispatchers.Main) {
+                onScanningState?.invoke(false)
+            }
         }
     }
 
@@ -648,6 +730,7 @@ class MainActivity : FragmentActivity() {
                     var selectedDevice by remember { mutableStateOf<Pair<String, String>?>(null) }
                     var sessionPassword by remember { mutableStateOf("") }
                     var discoveredDevices by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
+                    var isScanningServers by remember { mutableStateOf(false) }
                     var currentVolume by remember { mutableFloatStateOf(50f) }
                     var currentBrightness by remember { mutableFloatStateOf(50f) }
 
@@ -731,31 +814,20 @@ class MainActivity : FragmentActivity() {
                         val isMatchingSaved = (saved != null && isSaved && getCleanTarget(saved.second) == devClean && saved.third.isNotEmpty()) ||
                                               (secClean.isNotEmpty() && secClean == devClean && secPass.isNotEmpty())
                         val resolvedPass = if (secPass.isNotEmpty()) secPass else (saved?.third ?: "")
-
-                        if (isMatchingSaved && resolvedPass.isNotEmpty()) {
-                            // Prompt Phone Lock (GPay style)
-                            promptPhoneLock(
-                                title = "Access ${device.first}",
-                                onSuccess = {
-                                    sessionPassword = resolvedPass
-                                    selectedDevice = device
-                                    fetchStatus(device.second, resolvedPass)
-                                    currentScreen = "remote"
-                                    RemoteBackgroundService.start(this@MainActivity, device.first, device.second)
-                                },
-                                onFallback = {
-                                    deviceToConnect = device
-                                    passwordInput = resolvedPass
-                                    saveDeviceChecked = true
-                                    showPasswordDialog = true
-                                }
-                            )
-                        } else {
-                            deviceToConnect = device
-                            passwordInput = ""
-                            saveDeviceChecked = true
-                            showPasswordDialog = true
+                        // Keep saved credentials up to date with fresh live target
+                        SecureStorage.saveServerTarget(this@MainActivity, device.second, device.first)
+                        if (resolvedPass.isNotEmpty()) {
+                            SecureStorage.savePassword(this@MainActivity, resolvedPass)
+                            saveCredentials(device.first, device.second, resolvedPass, true)
                         }
+
+                        // Direct seamless connection without phone lock or password prompt
+                        sessionPassword = resolvedPass
+                        selectedDevice = device
+                        fetchStatus(device.second, resolvedPass)
+                        currentScreen = "remote"
+                        RemoteBackgroundService.start(this@MainActivity, device.first, device.second)
+                        Toast.makeText(this@MainActivity, "⚡ Connected to ${device.first}", Toast.LENGTH_SHORT).show()
                     }
 
                     fun verifyAndConnect(device: Pair<String, String>, pass: String, saveDevice: Boolean) {
@@ -962,7 +1034,7 @@ class MainActivity : FragmentActivity() {
                                         modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
                                     )
                                     NavigationDrawerItem(
-                                        label = { Text("🖥️ Remote Desktop", fontWeight = FontWeight.Bold) },
+                                        label = { Text("Remote Desktop", fontWeight = FontWeight.Bold) },
                                         icon = { Icon(Icons.Rounded.Monitor, null, tint = if (currentScreen == "remote_desktop") Color(0xFF818CF8) else AppTheme.AccentCyan) },
                                         selected = currentScreen == "remote_desktop",
                                         onClick = { currentScreen = "remote_desktop"; scope.launch { drawerState.close() } },
@@ -1162,14 +1234,21 @@ class MainActivity : FragmentActivity() {
                                 }
                                 "discovery" -> {
                                     LaunchedEffect(Unit) {
-                                        discoverAllServers { discoveredDevices = it }
+                                        discoverAllServers(
+                                            onUpdate = { discoveredDevices = it },
+                                            onScanningState = { isScanningServers = it }
+                                        )
                                     }
                                     DiscoveryScreen(
                                         devices = discoveredDevices,
+                                        isScanning = isScanningServers,
                                         onSelect = { handleSelectDevice(it) },
                                         onRefresh = {
                                             discoveredDevices = emptyList()
-                                            discoverAllServers { discoveredDevices = it }
+                                            discoverAllServers(
+                                                onUpdate = { discoveredDevices = it },
+                                                onScanningState = { isScanningServers = it }
+                                            )
                                         },
                                         onScanQrClick = { showQrScanner = true },
                                         onMenuClick = { scope.launch { drawerState.open() } },
@@ -1652,6 +1731,7 @@ fun SplashScreen(onFinish: () -> Unit) {
 @Composable
 fun DiscoveryScreen(
     devices: List<Pair<String, String>>,
+    isScanning: Boolean = false,
     onSelect: (Pair<String, String>) -> Unit,
     onRefresh: () -> Unit,
     onScanQrClick: () -> Unit,
@@ -1678,7 +1758,15 @@ fun DiscoveryScreen(
                         Icon(Icons.Rounded.QrCodeScanner, contentDescription = "Scan QR Code", tint = AppTheme.AccentCyan)
                     }
                     IconButton(onClick = onRefresh) {
-                        Icon(Icons.Rounded.Refresh, contentDescription = "Scan", tint = AppTheme.AccentSky)
+                        if (isScanning) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                color = AppTheme.AccentSky,
+                                strokeWidth = 2.dp
+                            )
+                        } else {
+                            Icon(Icons.Rounded.Refresh, contentDescription = "Scan", tint = AppTheme.AccentSky)
+                        }
                     }
                     if (onSettingsClick != null) {
                         IconButton(onClick = onSettingsClick) {
@@ -1697,7 +1785,7 @@ fun DiscoveryScreen(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            LiquidScanner(isScanning = devices.isEmpty())
+            LiquidScanner(isScanning = isScanning || devices.isEmpty())
 
             Spacer(Modifier.height(16.dp))
 
@@ -1713,14 +1801,15 @@ fun DiscoveryScreen(
                         modifier = Modifier.padding(16.dp)
                     ) {
                         Text(
-                            "Searching for PC on local network...",
+                            if (isScanning) "Searching for PC on local network..." else "No PCs found on local network",
                             color = AppTheme.TextSecondary,
                             fontSize = 15.sp,
                             fontWeight = FontWeight.Medium
                         )
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            "Make sure Remote PC is open on your computer or scan its QR code",
+                            if (isScanning) "Make sure Remote PC is open on your computer or scan its QR code"
+                            else "Make sure Remote PC is running on your PC and connected to the same Wi-Fi",
                             color = AppTheme.TextMuted,
                             fontSize = 12.sp,
                             textAlign = TextAlign.Center
@@ -1732,13 +1821,14 @@ fun DiscoveryScreen(
                         ) {
                             OutlinedButton(
                                 onClick = onRefresh,
+                                enabled = !isScanning,
                                 shape = RoundedCornerShape(12.dp),
                                 border = BorderStroke(1.dp, AppTheme.AccentCyan.copy(alpha = 0.5f)),
                                 colors = ButtonDefaults.outlinedButtonColors(contentColor = AppTheme.AccentCyan)
                             ) {
                                 Icon(Icons.Rounded.WifiFind, contentDescription = null, modifier = Modifier.size(16.dp))
                                 Spacer(Modifier.width(6.dp))
-                                Text("Scan Wi-Fi", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                                Text(if (isScanning) "Scanning..." else "Scan Wi-Fi", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                             }
 
                             Button(
@@ -1779,11 +1869,22 @@ fun DiscoveryScreen(
                         }
                         TextButton(
                             onClick = onRefresh,
+                            enabled = !isScanning,
                             contentPadding = PaddingValues(horizontal = 6.dp, vertical = 2.dp)
                         ) {
-                            Icon(Icons.Rounded.Refresh, null, tint = AppTheme.AccentSky, modifier = Modifier.size(14.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text("Scan Again", fontSize = 12.sp, color = AppTheme.AccentSky)
+                            if (isScanning) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(12.dp),
+                                    color = AppTheme.AccentSky,
+                                    strokeWidth = 1.5.dp
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text("Scanning...", fontSize = 12.sp, color = AppTheme.AccentSky)
+                            } else {
+                                Icon(Icons.Rounded.Refresh, null, tint = AppTheme.AccentSky, modifier = Modifier.size(14.dp))
+                                Spacer(Modifier.width(4.dp))
+                                Text("Scan Again", fontSize = 12.sp, color = AppTheme.AccentSky)
+                            }
                         }
                     }
                 }
@@ -1934,8 +2035,9 @@ fun LiquidDeviceCard(device: Pair<String, String>, onClick: () -> Unit) {
                     LiveStatusBadge(text = "READY", color = AppTheme.AccentEmerald)
                 }
                 Spacer(Modifier.height(4.dp))
+                val hostIp = if (device.second.contains(":")) device.second.substringBefore(":") else device.second
                 Text(
-                    text = "Available on Local Wi-Fi",
+                    text = "$hostIp • Local Wi-Fi",
                     fontSize = 12.sp,
                     color = AppTheme.TextSecondary
                 )
@@ -2051,132 +2153,7 @@ fun RemoteControlScreen(
                 }
             }
 
-            Spacer(Modifier.height(10.dp))
-
-            // Hero AnyDesk Remote Desktop Card
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onNavigateRemoteDesktop() },
-                shape = RoundedCornerShape(18.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = Color(0xFF6366F1).copy(alpha = 0.18f)
-                ),
-                border = BorderStroke(1.5.dp, Color(0xFF818CF8).copy(alpha = 0.6f))
-            ) {
-                Row(
-                    modifier = Modifier.padding(16.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(48.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFF6366F1).copy(alpha = 0.3f))
-                            .border(1.dp, Color(0xFF818CF8), CircleShape),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            Icons.Rounded.Monitor,
-                            contentDescription = null,
-                            tint = Color(0xFFA5B4FC),
-                            modifier = Modifier.size(26.dp)
-                        )
-                    }
-                    Spacer(Modifier.width(14.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text(
-                                "🖥️ Remote Desktop",
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp,
-                                color = Color.White
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Surface(
-                                shape = RoundedCornerShape(6.dp),
-                                color = Color(0xFF10B981)
-                            ) {
-                                Text(
-                                    "ANYDESK",
-                                    fontSize = 9.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    color = Color.White,
-                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                                )
-                            }
-                        }
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            "Live Screen Mirror • Direct Touch & Trackpad • 60 FPS",
-                            fontSize = 11.sp,
-                            color = Color(0xFFCBD5E1)
-                        )
-                    }
-                    Icon(
-                        Icons.Rounded.ChevronRight,
-                        contentDescription = null,
-                        tint = Color(0xFFA5B4FC),
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-            }
-
-            Spacer(Modifier.height(10.dp))
-
-            // Two-Way Auto Connect Setup Card
-            Card(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable { onSetupAutoConnect() },
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = if (isAutoConnected) AppTheme.AccentEmerald.copy(alpha = 0.15f) else AppTheme.AccentCyan.copy(alpha = 0.12f)
-                ),
-                border = BorderStroke(1.dp, if (isAutoConnected) AppTheme.AccentEmerald.copy(alpha = 0.5f) else AppTheme.AccentCyan.copy(alpha = 0.4f))
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        if (isAutoConnected) Icons.Rounded.CheckCircle else Icons.Rounded.Bolt,
-                        contentDescription = null,
-                        tint = if (isAutoConnected) AppTheme.AccentEmerald else AppTheme.AccentCyan,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            if (isAutoConnected) "✓ Auto-Connect Active" else "⚡ Setup Auto-Connect",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp,
-                            color = AppTheme.TextPrimary
-                        )
-                        Text(
-                            if (isAutoConnected) "Authorized for seamless connection without prompt" else "Tap to request permanent auto-connect handshake with PC",
-                            fontSize = 11.sp,
-                            color = AppTheme.TextSecondary
-                        )
-                    }
-                    if (!isAutoConnected) {
-                        Surface(
-                            shape = RoundedCornerShape(8.dp),
-                            color = AppTheme.AccentCyan
-                        ) {
-                            Text(
-                                "Setup",
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = AppTheme.BackgroundDark
-                            )
-                        }
-                    }
-                }
-            }
-
-            Spacer(Modifier.height(20.dp))
+            Spacer(Modifier.height(16.dp))
             SectionHeader(title = "SYSTEM & WINDOWS")
             Spacer(Modifier.height(12.dp))
 

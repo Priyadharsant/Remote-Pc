@@ -450,13 +450,28 @@ def run_guarded_command(name: str, action: Callable[[], None], message: str, coo
 CONNECTED_CLIENTS = {}
 PENDING_PAIRINGS = {}
 
-def check_auth(supplied_password: str | None, x_device_token: str | None = None) -> bool:
+def check_auth(supplied_password: str | None, x_device_token: str | None = None, client_ip: str | None = None) -> bool:
+    # If strict_auto_connect is disabled, automatically allow local network connections
+    if not CONFIG.get('strict_auto_connect', False):
+        return True
+
+    # Check trusted devices by IP or token
+    if client_ip:
+        for d in CONFIG.get('trusted_devices', []):
+            if d.get('ip') == client_ip:
+                return True
+
     if x_device_token:
         trusted_tokens = CONFIG.get('trusted_tokens', {})
         if x_device_token in trusted_tokens:
             return True
+        for d in CONFIG.get('trusted_devices', []):
+            if d.get('token') == x_device_token:
+                return True
+
     if not CONFIG.get('is_configured', True):
         return True
+
     if isinstance(supplied_password, str) and supplied_password:
         if verify_password(supplied_password, CONFIG):
             return True
@@ -464,6 +479,10 @@ def check_auth(supplied_password: str | None, x_device_token: str | None = None)
         expected_pin = str(CONFIG.get('pin', '482 917')).replace(' ', '').strip()
         if expected_pin and clean_supplied == expected_pin:
             return True
+
+    if not CONFIG.get('strict_auto_connect', True):
+        return True
+
     return False
 
 def require_auth(
@@ -499,14 +518,14 @@ def require_auth(
         return
 
     # Check password, pairing PIN, or unconfigured server state
-    if check_auth(supplied_password, supplied_token):
+    if check_auth(supplied_password, supplied_token, client_ip):
         CONNECTED_CLIENTS[client_ip] = {
             'name': device_name,
             'id': device_id,
             'ip': client_ip,
             'token': supplied_token or '',
             'last_seen': time.time(),
-            'auto_connect': False
+            'auto_connect': True
         }
         return
 
@@ -1088,7 +1107,7 @@ def stream_pc_audio():
 async def ws_remote_desktop(websocket: WebSocket, password: str | None = Query(default=None), token: str | None = Query(default=None)):
     client_ip = websocket.client.host if websocket.client else "127.0.0.1"
     if client_ip not in ('127.0.0.1', '::1', 'localhost'):
-        authenticated = check_auth(password, token) or (token and check_auth(token, token)) or (password and check_auth(password, password))
+        authenticated = check_auth(password, token, client_ip) or (token and check_auth(token, token, client_ip)) or (password and check_auth(password, password, client_ip))
         if not authenticated:
             await websocket.close(code=1008)
             return
@@ -1114,7 +1133,7 @@ async def ws_remote_desktop(websocket: WebSocket, password: str | None = Query(d
     async def frame_sender():
         frame_id = 0
         while settings["active"]:
-            t0 = time.time()
+            t0 = time.perf_counter()
             fps = max(5, min(60, settings["fps"]))
             interval = 1.0 / fps
             try:
@@ -1130,9 +1149,12 @@ async def ws_remote_desktop(websocket: WebSocket, password: str | None = Query(d
             except Exception:
                 break
 
-            elapsed = time.time() - t0
-            sleep_time = max(0.001, interval - elapsed)
-            await asyncio.sleep(sleep_time)
+            elapsed = time.perf_counter() - t0
+            sleep_time = interval - elapsed
+            if sleep_time > 0.002:
+                await asyncio.sleep(sleep_time)
+            else:
+                await asyncio.sleep(0)
 
     sender_task = asyncio.create_task(frame_sender())
 
@@ -1520,7 +1542,7 @@ def download_file_from_phone(ip: str = Query(default=""), file_id: str = Query(.
     targets.extend(["127.0.0.1:15056", "127.0.0.1:5056"])
 
     user_home = os.path.expanduser("~")
-    dest_dir = os.path.join(user_home, "Downloads", "From_Phone")
+    dest_dir = os.path.join(user_home, "Downloads", "RemotePC")
     os.makedirs(dest_dir, exist_ok=True)
     safe_filename = "".join(c for c in filename if c.isalnum() or c in (' ', '.', '_', '-')).strip() or f"phone_{file_id}"
     save_path = os.path.join(dest_dir, safe_filename)

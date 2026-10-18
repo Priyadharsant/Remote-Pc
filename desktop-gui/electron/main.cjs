@@ -375,7 +375,8 @@ ipcMain.handle('window:is-maximized', () => {
 });
 
 ipcMain.handle('shell:open-folder', async (_, folderPath) => {
-  const target = folderPath || path.join(os.homedir(), 'Downloads', 'From_Phone');
+  const target = folderPath || path.join(os.homedir(), 'Downloads', 'RemotePC');
+  if (!fs.existsSync(target)) fs.mkdirSync(target, { recursive: true });
   await shell.openPath(target);
   return true;
 });
@@ -398,6 +399,110 @@ ipcMain.handle('shell:open-url', async (_, url) => {
 
 ipcMain.handle('get-app-version', () => {
   return app.getVersion();
+});
+
+// Upload PC file to phone (Downloads/RemotePC)
+ipcMain.handle('phone:upload-file', async (_, { phoneIp, filePath, fileName, fileBuffer }) => {
+  return new Promise((resolve, reject) => {
+    try {
+      let filename = fileName;
+      let streamOrBuffer = null;
+      let contentLength = 0;
+
+      if (filePath && fs.existsSync(filePath)) {
+        filename = filename || path.basename(filePath);
+        const stats = fs.statSync(filePath);
+        contentLength = stats.size;
+        streamOrBuffer = fs.createReadStream(filePath);
+      } else if (fileBuffer) {
+        filename = filename || 'file_' + Date.now();
+        const buf = Buffer.from(fileBuffer);
+        contentLength = buf.length;
+        streamOrBuffer = buf;
+      } else {
+        return reject(new Error('No valid file path or buffer provided'));
+      }
+
+      const encodedName = encodeURIComponent(filename);
+      const targetHost = phoneIp || '127.0.0.1';
+      const req = http.request({
+        hostname: targetHost,
+        port: 5056,
+        path: `/storage/upload?filename=${encodedName}`,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': contentLength,
+        },
+        timeout: 120000,
+      }, (res) => {
+        let body = '';
+        res.on('data', chunk => body += chunk);
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(body));
+          } catch {
+            resolve({ status: 'ok', filename });
+          }
+        });
+      });
+
+      req.on('error', (err) => reject(err));
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Upload to phone timed out'));
+      });
+
+      if (Buffer.isBuffer(streamOrBuffer)) {
+        req.write(streamOrBuffer);
+        req.end();
+      } else {
+        streamOrBuffer.pipe(req);
+      }
+    } catch (err) {
+      reject(err);
+    }
+  });
+});
+
+// Native Windows Drag-and-Drop: drag mobile file from app to Windows Desktop / Explorer
+ipcMain.on('phone:start-drag', async (event, { phoneIp, fileId, fileType, fileName }) => {
+  try {
+    const downloadsDir = path.join(os.homedir(), 'Downloads', 'RemotePC');
+    if (!fs.existsSync(downloadsDir)) fs.mkdirSync(downloadsDir, { recursive: true });
+    const localPath = path.join(downloadsDir, fileName);
+
+    // If file is not yet cached locally, download it first
+    if (!fs.existsSync(localPath)) {
+      const fileStream = fs.createWriteStream(localPath);
+      const targetHost = phoneIp || '127.0.0.1';
+      const streamUrl = (fileType === 'video' || fileType === 'audio')
+        ? `http://${targetHost}:5056/video?id=${fileId}`
+        : `http://${targetHost}:5056/storage/file?id=${fileId}&type=${encodeURIComponent(fileType)}`;
+
+      await new Promise((resolve, reject) => {
+        const req = http.get(streamUrl, (res) => {
+          res.pipe(fileStream);
+          fileStream.on('finish', () => {
+            fileStream.close();
+            resolve();
+          });
+        });
+        req.on('error', (err) => {
+          try { fs.unlinkSync(localPath); } catch (_) {}
+          reject(err);
+        });
+      });
+    }
+
+    // Call native Electron startDrag
+    event.sender.startDrag({
+      file: localPath,
+      icon: path.join(__dirname, '../src/assets/hero.png'),
+    });
+  } catch (err) {
+    console.error('[Electron] phone:start-drag error:', err);
+  }
 });
 
 // IPC handler for 1-click in-app auto update download & silent/direct execution

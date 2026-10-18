@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   FolderOpen, Image, Video, Music, Download, FileText,
-  RefreshCw, HardDriveDownload, Search, AlertCircle, Play
+  RefreshCw, HardDriveDownload, Search, AlertCircle, Play, GripVertical
 } from 'lucide-react';
 import { api } from '../api';
 import type { ServerStatus, PhoneFileItem } from '../types';
@@ -107,7 +107,7 @@ export const FileManager: React.FC<FileManagerProps> = ({ status }) => {
     try {
       const savedPath = await api.downloadPhoneFile(activeIp, file.id, file.type, file.name);
       if (savedPath) {
-        setActionMsg({ id: file.id, text: 'Saved to Downloads/From_Phone' });
+        setActionMsg({ id: file.id, text: 'Saved to Downloads/RemotePC' });
       } else {
         setActionMsg({ id: file.id, text: 'Download failed' });
       }
@@ -252,18 +252,39 @@ export const FileManager: React.FC<FileManagerProps> = ({ status }) => {
             return (
               <div
                 key={file.id}
-                className="p-3.5 rounded-xl bg-slate-900/70 border border-slate-800/80 hover:border-cyan-500/35 transition flex flex-col justify-between group relative overflow-hidden"
+                draggable={true}
+                onDragStart={(e) => {
+                  e.dataTransfer.setData('text/plain', file.name);
+                  if (window.electronAPI?.startDragPhoneFile) {
+                    window.electronAPI.startDragPhoneFile({
+                      phoneIp: activeIp,
+                      fileId: file.id,
+                      fileType: file.type,
+                      fileName: file.name
+                    });
+                  }
+                }}
+                className="p-3.5 rounded-xl bg-slate-900/70 border border-slate-800/80 hover:border-cyan-500/35 transition flex flex-col justify-between group relative overflow-hidden cursor-grab active:cursor-grabbing hover:shadow-lg hover:shadow-cyan-500/10"
               >
                 {/* Clickable Header: Click card to live stream without saving */}
-                <div
-                  className="flex items-start gap-3 cursor-pointer"
-                  onClick={() => handleLiveStream(file)}
-                  title="Click to live stream without saving in PC"
-                >
-                  <div className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 shrink-0 group-hover:border-cyan-500/40 transition">
+                <div className="flex items-start gap-2.5">
+                  <div
+                    className="p-1 text-slate-500 group-hover:text-cyan-400 cursor-grab active:cursor-grabbing"
+                    title="Drag to Windows Desktop or Explorer"
+                  >
+                    <GripVertical size={16} />
+                  </div>
+                  <div
+                    className="p-2.5 rounded-xl bg-slate-950/80 border border-slate-800 shrink-0 group-hover:border-cyan-500/40 transition cursor-pointer"
+                    onClick={() => handleLiveStream(file)}
+                    title="Click to live stream without saving in PC"
+                  >
                     {getFileIcon(file.type)}
                   </div>
-                  <div className="flex-1 min-w-0">
+                  <div
+                    className="flex-1 min-w-0 cursor-pointer"
+                    onClick={() => handleLiveStream(file)}
+                  >
                     <h5 className="font-semibold text-xs text-slate-200 truncate group-hover:text-cyan-300 transition" title={file.name}>
                       {file.name}
                     </h5>
@@ -307,7 +328,7 @@ export const FileManager: React.FC<FileManagerProps> = ({ status }) => {
                       onClick={() => handleSaveToPc(file)}
                       disabled={isOpening || isSaving}
                       className="py-1.5 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-medium flex items-center justify-center gap-1.5 transition active:scale-98"
-                      title="Save file to Downloads/From_Phone without opening"
+                      title="Save file to Downloads/RemotePC without opening"
                     >
                       {isSaving ? (
                         <RefreshCw size={12} className="animate-spin text-slate-300" />

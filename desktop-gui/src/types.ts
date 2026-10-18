@@ -118,7 +118,10 @@ declare global {
       startServer: () => Promise<{ success: boolean; error?: string }>;
       getAppVersion: () => Promise<string>;
       downloadAndInstallUpdate: (url: string, version: string) => Promise<{ success: boolean; error?: string }>;
-      onUpdateProgress: (callback: (progress: UpdateProgress) => void) => () => void;
+      onUpdateProgress?: (callback: (progress: UpdateProgress) => void) => () => void;
+      getPathForFile?: (file: File) => string;
+      uploadFileToPhone?: (data: { phoneIp: string; filePath?: string; fileName?: string; fileBuffer?: ArrayBuffer }) => Promise<{ status: string; filename?: string }>;
+      startDragPhoneFile?: (data: { phoneIp: string; fileId: number; fileType: string; fileName: string }) => void;
     };
   }
 }

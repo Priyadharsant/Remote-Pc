@@ -14,6 +14,8 @@ import android.provider.Settings
 import android.util.Log
 import android.view.KeyEvent
 import android.widget.Toast
+import android.webkit.MimeTypeMap
+import android.media.MediaScannerConnection
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.*
@@ -90,19 +92,39 @@ class VideoStreamServer(
 
     private fun handleConnection(socket: Socket) {
         try {
-            val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
-            val reqLine = reader.readLine() ?: return
-            val parts = reqLine.split(" ")
-            if (parts.size < 2) return
-            val uri = parts[1]
+            val rawIn = socket.getInputStream()
+            val headerBytes = ByteArrayOutputStream()
+            var prev1 = -1
+            var prev2 = -1
+            var prev3 = -1
+            while (true) {
+                val b = rawIn.read()
+                if (b == -1) break
+                headerBytes.write(b)
+                if (prev3 == '\r'.code && prev2 == '\n'.code && prev1 == '\r'.code && b == '\n'.code) {
+                    break
+                }
+                prev3 = prev2
+                prev2 = prev1
+                prev1 = b
+            }
+
+            val headerStr = headerBytes.toString("UTF-8")
+            val lines = headerStr.split("\r\n")
+            if (lines.isEmpty()) return
+            val reqParts = lines[0].split(" ")
+            if (reqParts.size < 2) return
+            val uri = reqParts[1]
 
             var rangeHeader: String? = null
-            var hLine: String? = reader.readLine()
-            while (!hLine.isNullOrEmpty()) {
-                if (hLine.lowercase(Locale.ROOT).startsWith("range:")) {
-                    rangeHeader = hLine.substring(6).trim()
+            var contentLength = 0L
+            for (line in lines) {
+                val lower = line.lowercase(Locale.ROOT)
+                if (lower.startsWith("range:")) {
+                    rangeHeader = line.substring(6).trim()
+                } else if (lower.startsWith("content-length:")) {
+                    contentLength = line.substring(15).trim().toLongOrNull() ?: 0L
                 }
-                hLine = reader.readLine()
             }
 
             val out = socket.getOutputStream()
@@ -282,6 +304,21 @@ class VideoStreamServer(
                 }
                 out.write("HTTP/1.1 404 Not Found\r\n\r\n".toByteArray())
                 out.flush()
+                return
+            } else if (uri.startsWith("/storage/upload")) {
+                val filenameParam = uri.substringAfter("filename=", "file_${System.currentTimeMillis()}").substringBefore("&")
+                val decodedName = try { URLDecoder.decode(filenameParam, "UTF-8") } catch (_: Exception) { filenameParam }
+                val cleanName = File(decodedName).name
+                val success = saveUploadedFile(cleanName, contentLength, rawIn)
+                if (success) {
+                    Handler(Looper.getMainLooper()).post {
+                        Toast.makeText(context, "📥 Received $cleanName from PC\nSaved in Downloads/RemotePC", Toast.LENGTH_LONG).show()
+                    }
+                    sendJsonResponse(out, "{\"status\":\"ok\",\"filename\":\"$cleanName\"}")
+                } else {
+                    out.write("HTTP/1.1 500 Internal Server Error\r\n\r\nFailed to save file".toByteArray())
+                    out.flush()
+                }
                 return
             } else if (!uri.startsWith("/video")) {
                 val body = "<h3>Remote PC Android Control Server Active</h3>".toByteArray()
@@ -631,4 +668,84 @@ class VideoStreamServer(
         root.put("apps", array)
         return root.toString()
     }
+
+    private fun saveUploadedFile(name: String, length: Long, input: InputStream): Boolean {
+        val ext = name.substringAfterLast(".", "")
+        val mimeType = if (ext.isNotEmpty()) {
+            MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext.lowercase(Locale.ROOT)) ?: "application/octet-stream"
+        } else {
+            "application/octet-stream"
+        }
+
+        // 1. MediaStore API (Android 10+ Q) with strict trailing slash
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            try {
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, "${Environment.DIRECTORY_DOWNLOADS}/RemotePC/")
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+                val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+                if (uri != null) {
+                    resolver.openOutputStream(uri)?.use { outStream ->
+                        copyBytes(input, outStream, length)
+                    }
+                    values.clear()
+                    values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+                    resolver.update(uri, values, null, null)
+                    Log.d(TAG, "Successfully saved $name via MediaStore to Downloads/RemotePC/")
+                    return true
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "MediaStore upload save failed, attempting direct filesystem fallback", e)
+            }
+        }
+
+        // 2. Direct File storage in Downloads/RemotePC
+        try {
+            val downloads = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+            val targetDir = File(downloads, "RemotePC")
+            if (!targetDir.exists()) targetDir.mkdirs()
+            val targetFile = File(targetDir, name)
+            FileOutputStream(targetFile).use { outStream ->
+                copyBytes(input, outStream, length)
+            }
+            MediaScannerConnection.scanFile(context, arrayOf(targetFile.absolutePath), arrayOf(mimeType), null)
+            Log.d(TAG, "Successfully saved $name to public downloads ${targetFile.absolutePath}")
+            return true
+        } catch (e: Exception) {
+            Log.w(TAG, "Direct public file write failed", e)
+        }
+
+        // 3. Fallback to app-specific external files dir (scoped storage permission fallback)
+        try {
+            val extDir = context.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS) ?: context.filesDir
+            val targetDir = File(extDir, "RemotePC").apply { mkdirs() }
+            val targetFile = File(targetDir, name)
+            FileOutputStream(targetFile).use { outStream ->
+                copyBytes(input, outStream, length)
+            }
+            MediaScannerConnection.scanFile(context, arrayOf(targetFile.absolutePath), arrayOf(mimeType), null)
+            Log.d(TAG, "Saved $name to app-specific files ${targetFile.absolutePath}")
+            return true
+        } catch (e: Exception) {
+            Log.e(TAG, "All storage save attempts failed for $name", e)
+            return false
+        }
+    }
+
+    private fun copyBytes(input: InputStream, output: OutputStream, length: Long) {
+        val buffer = ByteArray(8192)
+        var remaining = if (length > 0) length else Long.MAX_VALUE
+        while (remaining > 0) {
+            val toRead = if (length > 0) minOf(remaining, buffer.size.toLong()).toInt() else buffer.size
+            val r = input.read(buffer, 0, toRead)
+            if (r == -1) break
+            output.write(buffer, 0, r)
+            if (length > 0) remaining -= r
+        }
+        output.flush()
+    }
 }
+
