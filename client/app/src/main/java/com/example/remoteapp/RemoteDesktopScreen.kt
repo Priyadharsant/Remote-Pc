@@ -196,7 +196,7 @@ fun RemoteDesktopScreen(
             .build()
 
         val encodedPass = try { URLEncoder.encode(password, "UTF-8") } catch (_: Exception) { password }
-        val wsUrl = "ws://$targetIp:5055/ws/remote-desktop?password=$encodedPass"
+        val wsUrl = "ws://$targetIp:5055/ws/remote-desktop?password=$encodedPass&token=$encodedPass"
         val request = Request.Builder().url(wsUrl).build()
 
         val ws = client.newWebSocket(request, object : WebSocketListener() {

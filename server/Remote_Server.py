@@ -1085,10 +1085,11 @@ def stream_pc_audio():
     return StreamingResponse(remote_desktop.generate_audio_stream(), media_type="audio/wav")
 
 @app.websocket('/ws/remote-desktop')
-async def ws_remote_desktop(websocket: WebSocket, password: str | None = None, token: str | None = None):
+async def ws_remote_desktop(websocket: WebSocket, password: str | None = Query(default=None), token: str | None = Query(default=None)):
     client_ip = websocket.client.host if websocket.client else "127.0.0.1"
     if client_ip not in ('127.0.0.1', '::1', 'localhost'):
-        if not check_auth(password, token):
+        authenticated = check_auth(password, token) or (token and check_auth(token, token)) or (password and check_auth(password, password))
+        if not authenticated:
             await websocket.close(code=1008)
             return
 
@@ -1720,7 +1721,23 @@ def register_device(
         'port': PORT
     }
 
-SERVER_VERSION = "3.0.0"
+def get_current_server_version() -> str:
+    for candidate in [
+        os.path.join(BASE_DIR, "config.json"),
+        os.path.join(BASE_DIR, "..", "package.json"),
+        os.path.join(os.path.dirname(sys.executable), "config.json")
+    ]:
+        try:
+            if os.path.exists(candidate):
+                with open(candidate, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if "version" in data and data["version"]:
+                        return str(data["version"]).strip()
+        except Exception:
+            pass
+    return "3.0.6"
+
+SERVER_VERSION = get_current_server_version()
 GITHUB_REPO = "Priyadharsant/Remote-Pc"
 _UPDATE_STATE = {"status": "idle", "progress": 0, "message": "Idle", "error": None}
 
