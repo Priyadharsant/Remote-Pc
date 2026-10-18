@@ -3,7 +3,7 @@
  * Modeled after Finance Application's version.js architecture
  */
 
-export const APP_VERSION = "3.0.3";
+export const APP_VERSION = "3.0.4";
 export const APP_BUILD_DATE = "2026-10-18";
 export const APP_NAME = "Remote PC";
 export const GITHUB_REPO = "Priyadharsant/Remote-Pc";
