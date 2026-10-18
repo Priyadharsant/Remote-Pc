@@ -292,7 +292,7 @@ async function main() {
     },
     hasApk && {
       localPath: apkPath,
-      name: "Remote.PC.apk",
+      name: "Remote PC.apk",
       contentType: "application/vnd.android.package-archive",
     },
     latestYmlPath && {
@@ -327,18 +327,23 @@ async function main() {
     }
   }
 
-  // 4. Upload all assets in parallel using high-speed streaming
-  console.log(`\n🚀 Uploading ${filesToUpload.length} release assets in parallel...`);
+  // 4. Upload all assets sequentially using high-speed streaming with retry
+  console.log(`\n🚀 Uploading ${filesToUpload.length} release assets sequentially...`);
   const baseUploadUrl = release.upload_url
     ? release.upload_url.replace(/\{.*\}/, "")
     : `https://uploads.github.com/repos/${OWNER}/${REPO}/releases/${release.id}/assets`;
 
-  await Promise.all(
-    filesToUpload.map(async (item) => {
-      const fileStats = fs.statSync(item.localPath);
-      const uploadUrl = `${baseUploadUrl}?name=${encodeURIComponent(item.name)}`;
+  for (const item of filesToUpload) {
+    const fileStats = fs.statSync(item.localPath);
+    const uploadUrl = `${baseUploadUrl}?name=${encodeURIComponent(item.name)}`;
+    console.log(`\nUploading ${item.name} (${(fileStats.size / (1024 * 1024)).toFixed(1)} MB)...`);
+
+    let uploaded = false;
+    let attempts = 0;
+    while (!uploaded && attempts < 3) {
+      attempts++;
       try {
-        const uploadedAsset = await uploadFileStream(
+        await uploadFileStream(
           uploadUrl,
           item.localPath,
           item.contentType,
@@ -347,9 +352,11 @@ async function main() {
         console.log(
           `\n✓ [${item.name}] Uploaded successfully (${(fileStats.size / (1024 * 1024)).toFixed(1)} MB)`
         );
-        return uploadedAsset;
+        uploaded = true;
       } catch (uploadErr) {
-        if (uploadErr.message && uploadErr.message.includes("already_exists")) {
+        console.warn(`\n⚠️  Attempt ${attempts} failed for ${item.name}: ${uploadErr.message}`);
+        // If it already exists, delete and retry
+        try {
           const assetsList = await fetch(
             `https://api.github.com/repos/${OWNER}/${REPO}/releases/${release.id}/assets`,
             { headers }
@@ -358,26 +365,22 @@ async function main() {
             (a) => normalizeName(a.name) === normalizeName(item.name)
           );
           if (existing) {
+            console.log(`  Deleting existing/partial asset ${existing.name} (id: ${existing.id})...`);
             await fetch(
               `https://api.github.com/repos/${OWNER}/${REPO}/releases/assets/${existing.id}`,
               { method: "DELETE", headers }
             );
-            const uploadedAsset = await uploadFileStream(
-              uploadUrl,
-              item.localPath,
-              item.contentType,
-              token
-            );
-            console.log(
-              `\n✓ [${item.name}] Uploaded successfully (${(fileStats.size / (1024 * 1024)).toFixed(1)} MB)`
-            );
-            return uploadedAsset;
           }
+        } catch (_) {}
+
+        if (attempts >= 3) {
+          throw uploadErr;
         }
-        throw uploadErr;
+        console.log(`  Retrying ${item.name} in 3 seconds...`);
+        await new Promise((r) => setTimeout(r, 3000));
       }
-    })
-  );
+    }
+  }
 
   console.log(`\n========================================================`);
   console.log(`🎉 Successfully published and uploaded Remote PC ${tag}!`);
