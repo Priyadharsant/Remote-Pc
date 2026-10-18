@@ -140,6 +140,8 @@ def build(args):
                 "--hidden-import=uvicorn.lifespan.on",
                 "--hidden-import=pynput.keyboard._win32",
                 "--hidden-import=pynput.mouse._win32",
+                "--collect-all=mss",
+                "--collect-all=sounddevice",
                 f"--distpath={ROOT_DIR}",
                 f"--workpath={os.path.join(ROOT_DIR, 'build', 'server')}",
             ]

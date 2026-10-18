@@ -2,6 +2,7 @@ from collections.abc import Callable
 import base64
 import hashlib
 import hmac
+import asyncio
 import json
 import logging
 import os
@@ -19,11 +20,12 @@ import tkinter as tk
 from tkinter import messagebox
 import traceback
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 
-from controllers import brightness, keyboard, media, mouse, system_controls, volume, video_stream
+from controllers import brightness, keyboard, media, mouse, system_controls, volume, video_stream, remote_desktop
+
 
 _LOG_ENTRIES = []
 _MAX_LOGS = 250
@@ -1046,6 +1048,123 @@ def read_text_file(path: str = Query(...), max_bytes: int = 500000) -> dict:
         return {"content": content, "path": path, "name": os.path.basename(path)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ==============================================================================
+# Wireless AnyDesk-Style Remote Desktop & Audio Streaming Endpoints
+# ==============================================================================
+
+@app.get('/remote-desktop/monitors', dependencies=[Depends(require_auth)])
+def get_desktop_monitors() -> dict:
+    mons = remote_desktop.get_monitors_info()
+    return {"status": "ok", "monitors": mons}
+
+@app.post('/remote-desktop/action', dependencies=[Depends(require_auth)])
+async def execute_desktop_action(request: Request) -> dict:
+    try:
+        data = await request.json()
+        return await asyncio.to_thread(remote_desktop.handle_input_action, data)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get('/remote-desktop/clipboard', dependencies=[Depends(require_auth)])
+def get_desktop_clipboard() -> dict:
+    res = remote_desktop.handle_input_action({"type": "clipboard_get"})
+    return res
+
+@app.post('/remote-desktop/clipboard', dependencies=[Depends(require_auth)])
+async def set_desktop_clipboard(request: Request) -> dict:
+    try:
+        data = await request.json()
+        data["type"] = "clipboard_set"
+        return await asyncio.to_thread(remote_desktop.handle_input_action, data)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get('/audio/stream')
+def stream_pc_audio():
+    return StreamingResponse(remote_desktop.generate_audio_stream(), media_type="audio/wav")
+
+@app.websocket('/ws/remote-desktop')
+async def ws_remote_desktop(websocket: WebSocket, password: str | None = None, token: str | None = None):
+    client_ip = websocket.client.host if websocket.client else "127.0.0.1"
+    if client_ip not in ('127.0.0.1', '::1', 'localhost'):
+        if not check_auth(password, token):
+            await websocket.close(code=1008)
+            return
+
+    await websocket.accept()
+    log_server_event(f"Remote Desktop connected from {client_ip}", "SUCCESS")
+
+    settings = {
+        "monitor": 1,
+        "quality": 65,
+        "scale": 0.75,
+        "fps": 30,
+        "active": True
+    }
+
+    # Initial monitor handshake
+    mons = remote_desktop.get_monitors_info()
+    try:
+        await websocket.send_json({"type": "init", "monitors": mons})
+    except Exception:
+        return
+
+    async def frame_sender():
+        frame_id = 0
+        while settings["active"]:
+            t0 = time.time()
+            fps = max(5, min(60, settings["fps"]))
+            interval = 1.0 / fps
+            try:
+                mon_id = settings["monitor"]
+                quality = settings["quality"]
+                scale = settings["scale"]
+                jpeg_bytes, w, h = await asyncio.to_thread(
+                    remote_desktop.capture_screen_jpeg, mon_id, quality, scale
+                )
+                packet = remote_desktop.pack_frame(jpeg_bytes, mon_id, w, h, frame_id)
+                await websocket.send_bytes(packet)
+                frame_id += 1
+            except Exception:
+                break
+
+            elapsed = time.time() - t0
+            sleep_time = max(0.001, interval - elapsed)
+            await asyncio.sleep(sleep_time)
+
+    sender_task = asyncio.create_task(frame_sender())
+
+    try:
+        while True:
+            msg = await websocket.receive_text()
+            try:
+                data = json.loads(msg)
+                msg_type = data.get("type")
+                if msg_type == "set_monitor":
+                    settings["monitor"] = int(data.get("monitor", 1))
+                elif msg_type == "set_quality":
+                    if "quality" in data:
+                        settings["quality"] = int(data["quality"])
+                    if "scale" in data:
+                        settings["scale"] = float(data["scale"])
+                    if "fps" in data:
+                        settings["fps"] = int(data["fps"])
+                elif msg_type == "clipboard_get":
+                    res = remote_desktop.handle_input_action(data)
+                    await websocket.send_json({"type": "clipboard_data", "text": res.get("text", "")})
+                else:
+                    await asyncio.to_thread(remote_desktop.handle_input_action, data)
+            except Exception:
+                pass
+    except WebSocketDisconnect:
+        pass
+    except Exception:
+        pass
+    finally:
+        settings["active"] = False
+        sender_task.cancel()
+        log_server_event(f"Remote Desktop disconnected from {client_ip}", "INFO")
 
 @app.post('/player/open', dependencies=[Depends(require_auth)])
 @app.post('/media/play-on-pc', dependencies=[Depends(require_auth)])

@@ -962,6 +962,17 @@ class MainActivity : FragmentActivity() {
                                         modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
                                     )
                                     NavigationDrawerItem(
+                                        label = { Text("🖥️ Remote Desktop", fontWeight = FontWeight.Bold) },
+                                        icon = { Icon(Icons.Rounded.Monitor, null, tint = if (currentScreen == "remote_desktop") Color(0xFF818CF8) else AppTheme.AccentCyan) },
+                                        selected = currentScreen == "remote_desktop",
+                                        onClick = { currentScreen = "remote_desktop"; scope.launch { drawerState.close() } },
+                                        colors = NavigationDrawerItemDefaults.colors(
+                                            selectedContainerColor = Color(0xFF6366F1).copy(alpha = 0.2f),
+                                            selectedTextColor = Color(0xFF818CF8)
+                                        ),
+                                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                                    )
+                                    NavigationDrawerItem(
                                         label = { Text("Touchpad Trackpad", fontWeight = FontWeight.Medium) },
                                         icon = { Icon(Icons.Rounded.TouchApp, null, tint = if (currentScreen == "touchpad") AppTheme.AccentCyan else AppTheme.TextSecondary) },
                                         selected = currentScreen == "touchpad",
@@ -1063,7 +1074,7 @@ class MainActivity : FragmentActivity() {
                             currentScreen = if (selectedDevice != null) "remote" else "discovery"
                         }
 
-                        BackHandler(enabled = !drawerState.isOpen && currentScreen in listOf("touchpad", "keyboard", "media", "pc_files", "phone_files")) {
+                        BackHandler(enabled = !drawerState.isOpen && currentScreen in listOf("touchpad", "keyboard", "media", "pc_files", "phone_files", "remote_desktop")) {
                             currentScreen = "remote"
                         }
 
@@ -1220,6 +1231,7 @@ class MainActivity : FragmentActivity() {
                                         },
                                         onRefreshStatus = { fetchStatus(dev.second, sessionPassword) },
                                         onCommand = { cmd -> sendCommand(cmd, dev.second, sessionPassword) },
+                                        onNavigateRemoteDesktop = { currentScreen = "remote_desktop" },
                                         onBack = { currentScreen = "discovery" },
                                         onMenuClick = { scope.launch { drawerState.open() } }
                                     )
@@ -1281,6 +1293,15 @@ class MainActivity : FragmentActivity() {
                                         password = sessionPassword,
                                         onBack = { currentScreen = "remote" },
                                         onMenuClick = { scope.launch { drawerState.open() } }
+                                    )
+                                }
+                                "remote_desktop" -> {
+                                    val dev = selectedDevice ?: Pair("PC", "127.0.0.1:5055")
+                                    val host = if (dev.second.contains(":")) dev.second.substringBefore(":") else dev.second
+                                    RemoteDesktopScreen(
+                                        targetIp = host,
+                                        password = sessionPassword,
+                                        onBack = { currentScreen = "remote" }
                                     )
                                 }
                             }
@@ -1953,6 +1974,7 @@ fun RemoteControlScreen(
     onBrightnessChangeFinished: (() -> Unit)? = null,
     onRefreshStatus: () -> Unit,
     onCommand: (String) -> Unit,
+    onNavigateRemoteDesktop: () -> Unit = {},
     onBack: () -> Unit,
     onMenuClick: () -> Unit
 ) {
@@ -2026,6 +2048,77 @@ fun RemoteControlScreen(
                         Text("Local Wi-Fi Network", fontSize = 11.sp, color = AppTheme.TextSecondary)
                     }
                     LiveStatusBadge(text = "CONNECTED", color = AppTheme.AccentEmerald)
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            // Hero AnyDesk Remote Desktop Card
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { onNavigateRemoteDesktop() },
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = Color(0xFF6366F1).copy(alpha = 0.18f)
+                ),
+                border = BorderStroke(1.5.dp, Color(0xFF818CF8).copy(alpha = 0.6f))
+            ) {
+                Row(
+                    modifier = Modifier.padding(16.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(48.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF6366F1).copy(alpha = 0.3f))
+                            .border(1.dp, Color(0xFF818CF8), CircleShape),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Rounded.Monitor,
+                            contentDescription = null,
+                            tint = Color(0xFFA5B4FC),
+                            modifier = Modifier.size(26.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(14.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "🖥️ Remote Desktop",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                color = Color.White
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Surface(
+                                shape = RoundedCornerShape(6.dp),
+                                color = Color(0xFF10B981)
+                            ) {
+                                Text(
+                                    "ANYDESK",
+                                    fontSize = 9.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    color = Color.White,
+                                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            "Live Screen Mirror • Direct Touch & Trackpad • 60 FPS",
+                            fontSize = 11.sp,
+                            color = Color(0xFFCBD5E1)
+                        )
+                    }
+                    Icon(
+                        Icons.Rounded.ChevronRight,
+                        contentDescription = null,
+                        tint = Color(0xFFA5B4FC),
+                        modifier = Modifier.size(20.dp)
+                    )
                 }
             }
 
