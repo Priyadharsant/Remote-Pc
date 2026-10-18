@@ -396,7 +396,7 @@ async function main() {
   console.log(`\n========================================================`);
   console.log(`🎉 Successfully published and uploaded Remote PC ${tag}!`);
   console.log(`GitHub Release: https://github.com/${OWNER}/${REPO}/releases/tag/${tag}`);
-  console.log(`📱 APK Download:     https://github.com/${OWNER}/${REPO}/releases/download/${tag}/Remote%20PC.apk`);
+  console.log(`📱 APK Download:     https://github.com/${OWNER}/${REPO}/releases/download/${tag}/Remote.PC.apk`);
   console.log(`🖥️  EXE Download:     https://github.com/${OWNER}/${REPO}/releases/download/${tag}/Remote_PC_Setup.exe`);
   console.log(`========================================================\n`);
 }
