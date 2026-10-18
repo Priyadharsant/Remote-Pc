@@ -8,6 +8,10 @@
 #define MyAppGuiExe "Remote PC GUI.exe"
 #define MyAppIcon "server\logo.ico"
 
+#ifndef AppCompression
+#define AppCompression "lzma2/fast"
+#endif
+
 [Setup]
 AppId={{D37E64B2-9F81-4C55-8AA3-BD76C3AE8521}
 AppName={#MyAppName}
@@ -19,7 +23,7 @@ AllowNoIcons=yes
 OutputDir=.
 OutputBaseFilename=Remote_PC_Setup
 SetupIconFile={#MyAppIcon}
-Compression=lzma2/max
+Compression={#AppCompression}
 SolidCompression=yes
 WizardStyle=modern
 PrivilegesRequired=lowest

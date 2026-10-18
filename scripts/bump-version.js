@@ -5,11 +5,14 @@
  * Modeled after Finance Application release architecture.
  *
  * Usage:
- *   node scripts/bump-version.js patch        (3.0.0 -> 3.0.1)
- *   node scripts/bump-version.js minor        (3.0.0 -> 3.1.0)
- *   node scripts/bump-version.js major        (3.0.0 -> 4.0.0)
- *   node scripts/bump-version.js 3.1.2        (Explicit version)
- *   node scripts/bump-version.js patch --release  (Bump, commit, tag, push, build, upload)
+ *   node scripts/bump-version.js patch                  (Bump patch: 3.0.0 -> 3.0.1)
+ *   node scripts/bump-version.js minor                  (Bump minor: 3.0.0 -> 3.1.0)
+ *   node scripts/bump-version.js major                  (Bump major: 3.0.0 -> 4.0.0)
+ *   node scripts/bump-version.js patch --release        (Bump, commit, tag, push, build fast, upload)
+ *   node scripts/bump-version.js patch --release --skip (Instant release: upload existing binaries in 10s)
+ *   node scripts/bump-version.js patch --release --cloud(Zero local CPU: let GitHub Actions build in cloud)
+ *   node scripts/bump-version.js patch --release --exe-only (Build & upload Windows EXE only)
+ *   node scripts/bump-version.js patch --release --apk-only (Build & upload Android APK only)
  */
 
 import fs from "fs";
@@ -175,9 +178,56 @@ async function promptForVersion(current) {
   });
 }
 
+async function promptForBuildMode() {
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  console.log("\n========================================================");
+  console.log(" Choose Release Strategy:");
+  console.log("========================================================");
+  console.log(" 1) Fast Incremental (Smart cache: ~30-60s) [Recommended]");
+  console.log(" 2) Instant Release (Skip compilation, upload existing binaries) [~10s]");
+  console.log(" 3) Cloud CI/CD (GitHub Actions in cloud - 0s local CPU)");
+  console.log(" 4) Windows Setup EXE only");
+  console.log(" 5) Android APK only");
+  console.log(" 6) Full Clean Rebuild (Rebuild everything from scratch) [~3-4 mins]");
+  console.log("========================================================\n");
+
+  return new Promise((resolve) => {
+    rl.question("Select option [1-6] (default: 1): ", (answer) => {
+      rl.close();
+      const trimmed = answer.trim();
+      if (!trimmed || trimmed === "1") resolve("fast");
+      else if (trimmed === "2") resolve("skip");
+      else if (trimmed === "3") resolve("cloud");
+      else if (trimmed === "4") resolve("exe-only");
+      else if (trimmed === "5") resolve("apk-only");
+      else if (trimmed === "6") resolve("clean");
+      else resolve("fast");
+    });
+  });
+}
+
 async function main() {
   const currentVersion = getCurrentVersion();
   const isReleaseFlag = process.argv.includes("--release") || process.argv.includes("-r");
+  const isSkipBuildFlag = process.argv.includes("--skip-build") || process.argv.includes("--no-build") || process.argv.includes("--skip");
+  const isCloudFlag = process.argv.includes("--cloud") || process.argv.includes("--ci");
+  const isFastFlag = process.argv.includes("--fast");
+  const isExeOnlyFlag = process.argv.includes("--exe-only");
+  const isApkOnlyFlag = process.argv.includes("--apk-only");
+  const isCleanFlag = process.argv.includes("--clean");
+
+  let buildMode = "fast";
+  if (isSkipBuildFlag) buildMode = "skip";
+  else if (isCloudFlag) buildMode = "cloud";
+  else if (isExeOnlyFlag) buildMode = "exe-only";
+  else if (isApkOnlyFlag) buildMode = "apk-only";
+  else if (isCleanFlag) buildMode = "clean";
+  else if (isFastFlag) buildMode = "fast";
+
   const nonFlagArgs = process.argv.slice(2).filter((a) => !a.startsWith("-"));
   let targetArg = nonFlagArgs[0];
 
@@ -187,12 +237,15 @@ async function main() {
   if (!targetArg) {
     if (!process.stdin.isTTY) {
       console.log(`Current version: ${currentVersion}`);
-      console.log("Usage: node scripts/bump-version.js [patch | minor | major | <version>] [--release]");
+      console.log("Usage: node scripts/bump-version.js [patch | minor | major | <version>] [--release] [--fast|--skip|--cloud|--exe-only|--apk-only]");
       process.exit(0);
     }
     nextVersion = await promptForVersion(currentVersion);
     if (!isReleaseFlag) {
-      shouldRelease = await askYesNo("Would you like to build APK/EXE & publish release now? (y/N): ");
+      shouldRelease = await askYesNo("Would you like to publish release to GitHub now? (y/N): ");
+    }
+    if (shouldRelease && !isSkipBuildFlag && !isCloudFlag && !isExeOnlyFlag && !isApkOnlyFlag && !isCleanFlag) {
+      buildMode = await promptForBuildMode();
     }
   } else {
     nextVersion = computeNextVersion(currentVersion, targetArg);
@@ -232,7 +285,6 @@ async function main() {
     });
     modifiedFiles.push("desktop-gui/src/version.ts");
   } else {
-    // Create desktop-gui/src/version.ts if not present
     const versionTsContent = `export const APP_VERSION = "${nextVersion}";\nexport const APP_BUILD_DATE = "${today}";\nexport const APP_NAME = "Remote PC";\n`;
     fs.writeFileSync(FILES.desktopVersionTs, versionTsContent, "utf-8");
     modifiedFiles.push("desktop-gui/src/version.ts (created)");
@@ -251,7 +303,6 @@ async function main() {
     updateFile(FILES.androidGradle, (content) => {
       let res = content;
       res = res.replace(/versionName\s*=\s*"[^"]*"/, `versionName = "${nextVersion}"`);
-      // Increment versionCode
       res = res.replace(/versionCode\s*=\s*(\d+)/, (_, code) => {
         const nextCode = parseInt(code, 10) + 1;
         return `versionCode = ${nextCode}`;
@@ -284,7 +335,7 @@ async function main() {
 
   if (shouldRelease) {
     console.log("\n========================================================");
-    console.log(` Executing Automated Release Pipeline for v${nextVersion}`);
+    console.log(` Executing Automated Release Pipeline for v${nextVersion} (Mode: ${buildMode.toUpperCase()})`);
     console.log("========================================================");
 
     const token = loadEnvToken();
@@ -329,38 +380,64 @@ async function main() {
       console.warn("⚠️ Git push notice:", pushErr.message);
     }
 
+    // If Cloud build mode, GitHub Actions handles compilation in the cloud!
+    if (buildMode === "cloud") {
+      console.log("\n========================================================");
+      console.log("☁️  Cloud CI/CD Triggered!");
+      console.log(`GitHub Actions will now build Windows Setup EXE and Android APK in parallel.`);
+      console.log(`Local compilation time: 0 seconds!`);
+      console.log(`Track workflow progress at: https://github.com/${repo}/actions`);
+      console.log("========================================================\n");
+      return;
+    }
+
     // 4. Build Android APK
-    console.log(`\n📱 Compiling Android APK with Gradle...`);
-    const clientDir = path.join(ROOT_DIR, "client");
-    const gradlewBat = path.join(clientDir, "gradlew.bat");
-    if (fs.existsSync(gradlewBat)) {
-      execSync(`"${gradlewBat}" assembleDebug`, { stdio: "inherit", cwd: clientDir });
-      const builtApk = path.join(clientDir, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
-      const rootApk = path.join(ROOT_DIR, "Remote PC.apk");
-      if (fs.existsSync(builtApk)) {
-        fs.copyFileSync(builtApk, rootApk);
-        const stats = fs.statSync(rootApk);
-        console.log(`✓ Android APK compiled: Remote PC.apk (${(stats.size / (1024 * 1024)).toFixed(1)} MB)`);
+    const needApk = buildMode === "fast" || buildMode === "apk-only" || buildMode === "clean";
+    if (needApk) {
+      console.log(`\n📱 Compiling Android APK with Gradle (--build-cache)...`);
+      const clientDir = path.join(ROOT_DIR, "client");
+      const gradlewBat = path.join(clientDir, "gradlew.bat");
+      if (fs.existsSync(gradlewBat)) {
+        const gradleArgs = buildMode === "clean" ? "clean assembleDebug --build-cache" : "assembleDebug --build-cache";
+        execSync(`"${gradlewBat}" ${gradleArgs}`, { stdio: "inherit", cwd: clientDir });
+        const builtApk = path.join(clientDir, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
+        const rootApk = path.join(ROOT_DIR, "Remote PC.apk");
+        if (fs.existsSync(builtApk)) {
+          fs.copyFileSync(builtApk, rootApk);
+          const stats = fs.statSync(rootApk);
+          console.log(`✓ Android APK compiled: Remote PC.apk (${(stats.size / (1024 * 1024)).toFixed(1)} MB)`);
+        }
       }
+    } else if (buildMode === "skip") {
+      console.log("⚡ Skipping Android build (using existing Remote PC.apk)");
     }
 
     // 5. Build Windows Setup EXE
-    console.log(`\n🖥️  Compiling Windows Executable & Inno Setup Installer...`);
-    const venvPython = path.join(ROOT_DIR, "server", ".venv", "Scripts", "python.exe");
-    const pythonExe = fs.existsSync(venvPython) ? `"${venvPython}"` : "python";
-    execSync(`${pythonExe} build_exe.py`, { stdio: "inherit", cwd: ROOT_DIR });
-    console.log("✓ Windows Setup installer generated successfully!");
+    const needExe = buildMode === "fast" || buildMode === "exe-only" || buildMode === "clean";
+    if (needExe) {
+      console.log(`\n🖥️  Compiling Windows Executable & Inno Setup Installer...`);
+      const venvPython = path.join(ROOT_DIR, "server", ".venv", "Scripts", "python.exe");
+      const pythonExe = fs.existsSync(venvPython) ? `"${venvPython}"` : "python";
+      const exeFlag = buildMode === "clean" ? "--clean" : "--fast";
+      execSync(`${pythonExe} build_exe.py ${exeFlag}`, { stdio: "inherit", cwd: ROOT_DIR });
+      console.log("✓ Windows Setup installer ready!");
+    } else if (buildMode === "skip") {
+      console.log("⚡ Skipping Windows build (using existing Remote_PC_Setup.exe)");
+    }
 
     // 6. Upload release assets
     console.log(`\n🚀 Uploading release assets to GitHub Releases...`);
-    execSync(`node scripts/upload-release.js`, { stdio: "inherit", cwd: ROOT_DIR });
+    let uploadFlag = "";
+    if (buildMode === "exe-only") uploadFlag = " --exe-only";
+    if (buildMode === "apk-only") uploadFlag = " --apk-only";
+    execSync(`node scripts/upload-release.js${uploadFlag}`, { stdio: "inherit", cwd: ROOT_DIR });
   } else {
     console.log("--------------------------------------------------------");
     console.log("Next steps (manual):");
-    console.log(`  1. Build Binaries  : npm run build:all`);
-    console.log(`  2. Commit changes  : git commit -am "chore: bump version to v${nextVersion}"`);
-    console.log(`  3. Tag release     : git tag v${nextVersion}`);
-    console.log(`  (Or run 'npm run release' to automate build, tag & upload)`);
+    console.log(`  1. Build Fast      : npm run build:fast`);
+    console.log(`  2. Instant Release : npm run release:quick`);
+    console.log(`  3. Cloud Release   : npm run release:cloud`);
+    console.log(`  (Or run 'npm run release' to choose interactively)`);
     console.log("========================================================\n");
   }
 }

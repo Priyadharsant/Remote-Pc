@@ -201,51 +201,67 @@ async function main() {
   }
 
   // 2. Prepare files to upload
+  const isExeOnly = process.argv.includes("--exe-only");
+  const isApkOnly = process.argv.includes("--apk-only");
+
   const exePath = path.join(ROOT_DIR, "Remote_PC_Setup.exe");
   const apkPath = path.join(ROOT_DIR, "Remote PC.apk");
 
-  if (!fs.existsSync(exePath)) {
-    throw new Error(`Executable installer not found at ${exePath}. Run 'npm run build:exe' first!`);
+  if (!isApkOnly && !fs.existsSync(exePath)) {
+    if (isExeOnly) {
+      throw new Error(`Executable installer not found at ${exePath}. Run 'npm run build:exe' first!`);
+    }
   }
-  if (!fs.existsSync(apkPath)) {
+
+  if (!isExeOnly && !fs.existsSync(apkPath)) {
     // Check if client build output exists
     const clientApk = path.join(ROOT_DIR, "client", "app", "build", "outputs", "apk", "debug", "app-debug.apk");
     if (fs.existsSync(clientApk)) {
       fs.copyFileSync(clientApk, apkPath);
-    } else {
+    } else if (isApkOnly) {
       throw new Error(`Android APK not found at ${apkPath}. Run 'npm run build:apk' first!`);
     }
   }
 
-  const exeStats = fs.statSync(exePath);
-  const apkStats = fs.statSync(apkPath);
-  console.log(`Found Windows Installer: Remote_PC_Setup.exe (${(exeStats.size / (1024 * 1024)).toFixed(1)} MB)`);
-  console.log(`Found Android APK:       Remote PC.apk (${(apkStats.size / (1024 * 1024)).toFixed(1)} MB)`);
+  const hasExe = !isApkOnly && fs.existsSync(exePath);
+  const hasApk = !isExeOnly && fs.existsSync(apkPath);
 
-  // Generate latest.yml for auto-updater
-  const sha512 = computeSha512(exePath);
-  const latestYmlContent = [
-    `version: ${version}`,
-    `files:`,
-    `  - url: Remote_PC_Setup.exe`,
-    `    sha512: ${sha512}`,
-    `    size: ${exeStats.size}`,
-    `path: Remote_PC_Setup.exe`,
-    `sha512: ${sha512}`,
-    `releaseDate: '${new Date().toISOString()}'`,
-    "",
-  ].join("\n");
-  const latestYmlPath = path.join(ROOT_DIR, "latest.yml");
-  fs.writeFileSync(latestYmlPath, latestYmlContent, "utf-8");
+  if (!hasExe && !hasApk) {
+    throw new Error("No release binaries found (neither Remote_PC_Setup.exe nor Remote PC.apk).");
+  }
+
+  const checksumLines = [];
+
+  if (hasExe) {
+    const exeStats = fs.statSync(exePath);
+    console.log(`Found Windows Installer: Remote_PC_Setup.exe (${(exeStats.size / (1024 * 1024)).toFixed(1)} MB)`);
+    const sha512 = computeSha512(exePath);
+    const latestYmlContent = [
+      `version: ${version}`,
+      `files:`,
+      `  - url: Remote_PC_Setup.exe`,
+      `    sha512: ${sha512}`,
+      `    size: ${exeStats.size}`,
+      `path: Remote_PC_Setup.exe`,
+      `sha512: ${sha512}`,
+      `releaseDate: '${new Date().toISOString()}'`,
+      "",
+    ].join("\n");
+    const latestYmlPath = path.join(ROOT_DIR, "latest.yml");
+    fs.writeFileSync(latestYmlPath, latestYmlContent, "utf-8");
+    checksumLines.push(`${computeSha256(exePath)}  Remote_PC_Setup.exe`);
+  }
+
+  if (hasApk) {
+    const apkStats = fs.statSync(apkPath);
+    console.log(`Found Android APK:       Remote PC.apk (${(apkStats.size / (1024 * 1024)).toFixed(1)} MB)`);
+    checksumLines.push(`${computeSha256(apkPath)}  Remote PC.apk`);
+  }
 
   // Generate checksums.txt
-  const checksumContent = [
-    `${computeSha256(exePath)}  Remote_PC_Setup.exe`,
-    `${computeSha256(apkPath)}  Remote PC.apk`,
-    ""
-  ].join("\n");
+  checksumLines.push("");
   const checksumPath = path.join(ROOT_DIR, "checksums.txt");
-  fs.writeFileSync(checksumPath, checksumContent, "utf-8");
+  fs.writeFileSync(checksumPath, checksumLines.join("\n"), "utf-8");
 
   const filesToUpload = [
     {
