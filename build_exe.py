@@ -145,6 +145,9 @@ def build(args):
                 "--collect-all=mss",
                 "--collect-all=sounddevice",
                 "--collect-all=websockets",
+                "--collect-all=pycaw",
+                "--collect-all=comtypes",
+                "--collect-all=numpy",
                 f"--distpath={ROOT_DIR}",
                 f"--workpath={os.path.join(ROOT_DIR, 'build', 'server')}",
             ]

@@ -26,6 +26,7 @@ import android.widget.Toast
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -89,6 +90,13 @@ data class MonitorInfo(
     val isPrimary: Boolean
 )
 
+data class WindowInfo(
+    val hwnd: Long,
+    val title: String,
+    val width: Int,
+    val height: Int
+)
+
 enum class TouchInteractionStyle {
     MOBILE_SCROLL, // Single finger swipe scrolls like a phone, tap clicks, long press right-clicks
     DRAG_SELECT    // Single finger drag holds left click (drags windows, highlights text)
@@ -137,6 +145,11 @@ fun RemoteDesktopScreen(
     var currentBitmap by remember { mutableStateOf<Bitmap?>(null) }
     var monitors by remember { mutableStateOf<List<MonitorInfo>>(emptyList()) }
     var selectedMonitorId by remember { mutableIntStateOf(1) }
+    var activeWindows by remember { mutableStateOf<List<WindowInfo>>(emptyList()) }
+    var targetMode by remember { mutableStateOf("desktop") } // "desktop" | "window"
+    var targetHwnd by remember { mutableLongStateOf(0L) }
+    var targetWindowTitle by remember { mutableStateOf("Full Desktop") }
+    var showWindowPickerSheet by remember { mutableStateOf(false) }
 
     // Stream Presets (Crisp 45 FPS, 60 quality, 0.9 scale)
     var selectedFps by remember { mutableIntStateOf(45) }
@@ -221,7 +234,7 @@ fun RemoteDesktopScreen(
                     connection.connect()
 
                     val inputStream = connection.inputStream
-                    // Skip the 44-byte WAV header safely
+                    // Parse 44-byte WAV header safely
                     val headerBytes = ByteArray(44)
                     var headerRead = 0
                     while (headerRead < 44) {
@@ -230,13 +243,28 @@ fun RemoteDesktopScreen(
                         headerRead += r
                     }
 
-                    val sampleRate = 44100
+                    var sampleRate = 48000
+                    var channelMask = AudioFormat.CHANNEL_OUT_STEREO
+                    if (headerRead >= 28) {
+                        val numChannels = (headerBytes[22].toInt() and 0xFF) or ((headerBytes[23].toInt() and 0xFF) shl 8)
+                        val sr = (headerBytes[24].toInt() and 0xFF) or
+                                ((headerBytes[25].toInt() and 0xFF) shl 8) or
+                                ((headerBytes[26].toInt() and 0xFF) shl 16) or
+                                ((headerBytes[27].toInt() and 0xFF) shl 24)
+                        if (sr in 8000..192000) {
+                            sampleRate = sr
+                        }
+                        if (numChannels == 1) {
+                            channelMask = AudioFormat.CHANNEL_OUT_MONO
+                        }
+                    }
+
                     val minBufSize = AudioTrack.getMinBufferSize(
                         sampleRate,
-                        AudioFormat.CHANNEL_OUT_STEREO,
+                        channelMask,
                         AudioFormat.ENCODING_PCM_16BIT
                     )
-                    val bufferSize = minBufSize.coerceAtLeast(4096)
+                    val bufferSize = minBufSize.coerceAtLeast(8192)
 
                     track = AudioTrack.Builder()
                         .setAudioAttributes(
@@ -249,7 +277,7 @@ fun RemoteDesktopScreen(
                             AudioFormat.Builder()
                                 .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
                                 .setSampleRate(sampleRate)
-                                .setChannelMask(AudioFormat.CHANNEL_OUT_STEREO)
+                                .setChannelMask(channelMask)
                                 .build()
                         )
                         .setBufferSizeInBytes(bufferSize * 2)
@@ -259,7 +287,7 @@ fun RemoteDesktopScreen(
                     audioTrackRef = track
                     track.play()
 
-                    val buffer = ByteArray(2048)
+                    val buffer = ByteArray(4096)
                     while (isActive) {
                         val bytesRead = inputStream.read(buffer, 0, buffer.size)
                         if (bytesRead == -1) break
@@ -289,6 +317,12 @@ fun RemoteDesktopScreen(
     val sendAction: (JSONObject) -> Unit = { json ->
         webSocketRef?.let { ws ->
             try {
+                if (!json.has("mode")) {
+                    json.put("mode", targetMode)
+                }
+                if (targetMode == "window" && !json.has("hwnd")) {
+                    json.put("hwnd", targetHwnd)
+                }
                 ws.send(json.toString())
             } catch (e: Exception) {
                 Log.e("RemoteDesktop", "Failed to send action: ${e.message}")
@@ -336,6 +370,10 @@ fun RemoteDesktopScreen(
                     put("quality", selectedQuality)
                     put("scale", selectedScale.toDouble())
                     put("monitor", selectedMonitorId)
+                    put("mode", targetMode)
+                    if (targetMode == "window") {
+                        put("hwnd", targetHwnd)
+                    }
                 }
                 webSocket.send(configMsg.toString())
             }
@@ -360,6 +398,42 @@ fun RemoteDesktopScreen(
                                 )
                             }
                             monitors = list
+
+                            val winsArray = json.optJSONArray("windows") ?: JSONArray()
+                            val winList = mutableListOf<WindowInfo>()
+                            for (i in 0 until winsArray.length()) {
+                                val obj = winsArray.getJSONObject(i)
+                                winList.add(
+                                    WindowInfo(
+                                        hwnd = obj.optLong("hwnd", 0L),
+                                        title = obj.optString("title", "App Window"),
+                                        width = obj.optInt("width", 1920),
+                                        height = obj.optInt("height", 1080)
+                                    )
+                                )
+                            }
+                            activeWindows = winList
+                        }
+                        "window_list" -> {
+                            val winsArray = json.optJSONArray("windows") ?: JSONArray()
+                            val winList = mutableListOf<WindowInfo>()
+                            for (i in 0 until winsArray.length()) {
+                                val obj = winsArray.getJSONObject(i)
+                                winList.add(
+                                    WindowInfo(
+                                        hwnd = obj.optLong("hwnd", 0L),
+                                        title = obj.optString("title", "App Window"),
+                                        width = obj.optInt("width", 1920),
+                                        height = obj.optInt("height", 1080)
+                                    )
+                                )
+                            }
+                            activeWindows = winList
+                        }
+                        "target_fallback" -> {
+                            targetMode = "desktop"
+                            targetHwnd = 0L
+                            targetWindowTitle = "Full Desktop"
                         }
                         "clipboard_data" -> {
                             val clipText = json.optString("text", "")
@@ -741,6 +815,28 @@ fun RemoteDesktopScreen(
                         )
                     }
 
+                    // 1-Tap Window / App Mode Switcher (Isolated app vs Full Desktop)
+                    IconButton(
+                        onClick = {
+                            triggerHaptic()
+                            sendAction(JSONObject().apply { put("type", "get_windows") })
+                            showWindowPickerSheet = true
+                        },
+                        modifier = Modifier
+                            .size(34.dp)
+                            .background(
+                                if (targetMode == "window") Color(0xFF10B981).copy(alpha = 0.25f) else Color.Transparent,
+                                CircleShape
+                            )
+                    ) {
+                        Icon(
+                            Icons.Rounded.FilterFrames,
+                            contentDescription = "Target Window / App",
+                            tint = if (targetMode == "window") Color(0xFF34D399) else Color(0xFFFBBF24),
+                            modifier = Modifier.size(19.dp)
+                        )
+                    }
+
                     // 1-Tap Windows Start Menu (Win)
                     IconButton(
                         onClick = {
@@ -869,6 +965,53 @@ fun RemoteDesktopScreen(
                             modifier = Modifier.size(19.dp)
                         )
                     }
+                }
+            }
+        }
+
+        // Floating Top Indicator when an isolated app/window is being controlled
+        if (targetMode == "window" && !showFullDrawer) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .padding(top = 10.dp)
+                    .clip(RoundedCornerShape(20.dp))
+                    .background(Color(0xD90F172A))
+                    .border(1.dp, Color(0xFF10B981), RoundedCornerShape(20.dp))
+                    .clickable {
+                        triggerHaptic()
+                        targetMode = "desktop"
+                        targetHwnd = 0L
+                        targetWindowTitle = "Full Desktop"
+                        sendAction(JSONObject().apply {
+                            put("type", "set_target")
+                            put("mode", "desktop")
+                            put("monitor", selectedMonitorId)
+                        })
+                    }
+                    .padding(horizontal = 12.dp, vertical = 6.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(7.dp)
+                            .background(Color(0xFF10B981), CircleShape)
+                    )
+                    Text(
+                        text = "App: ${targetWindowTitle.take(24)}${if (targetWindowTitle.length > 24) "…" else ""}",
+                        color = Color.White,
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    Icon(
+                        Icons.Rounded.Close,
+                        contentDescription = "Return to Full Desktop",
+                        tint = Color(0xFF94A3B8),
+                        modifier = Modifier.size(13.dp)
+                    )
                 }
             }
         }
@@ -1118,6 +1261,34 @@ fun RemoteDesktopScreen(
                             Text("Copy PC Clip", fontSize = 11.sp, color = Color.White)
                         }
 
+                        OutlinedButton(
+                            onClick = {
+                                triggerHaptic()
+                                sendAction(JSONObject().apply { put("type", "get_windows") })
+                                showFullDrawer = false
+                                showWindowPickerSheet = true
+                            },
+                            modifier = Modifier.weight(1f),
+                            shape = RoundedCornerShape(10.dp),
+                            border = androidx.compose.foundation.BorderStroke(
+                                1.dp,
+                                if (targetMode == "window") Color(0xFF10B981) else Color(0xFF334155)
+                            )
+                        ) {
+                            Icon(
+                                Icons.Rounded.FilterFrames,
+                                contentDescription = null,
+                                tint = if (targetMode == "window") Color(0xFF34D399) else Color(0xFFFBBF24),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = if (targetMode == "window") "Window Mode" else "Target App",
+                                fontSize = 11.sp,
+                                color = Color.White
+                            )
+                        }
+
                         if (monitors.size > 1) {
                             OutlinedButton(
                                 onClick = {
@@ -1244,6 +1415,230 @@ fun RemoteDesktopScreen(
                         KeyPill(label = "▶", modifier = Modifier.width(60.dp)) {
                             triggerHaptic()
                             sendAction(JSONObject().apply { put("type", "key_press"); put("key", "right") })
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        // Isolated App / Window Picker Bottom Sheet
+        // ---------------------------------------------------------------------
+        if (showWindowPickerSheet) {
+            ModalBottomSheet(
+                onDismissRequest = { showWindowPickerSheet = false },
+                containerColor = Color(0xFF0F172A),
+                dragHandle = { BottomSheetDefaults.DragHandle(color = Color(0xFF64748B)) }
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .padding(bottom = 28.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "Select View / Target App",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Text(
+                                text = if (targetMode == "window") "Currently streaming: $targetWindowTitle" else "Currently streaming: Full Desktop",
+                                fontSize = 11.sp,
+                                color = Color(0xFF94A3B8)
+                            )
+                        }
+
+                        IconButton(
+                            onClick = {
+                                triggerHaptic()
+                                sendAction(JSONObject().apply { put("type", "get_windows") })
+                            },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                Icons.Rounded.Refresh,
+                                contentDescription = "Refresh Windows",
+                                tint = Color(0xFF38BDF8),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+
+                    // Full Desktop Mode Card
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                triggerHaptic()
+                                targetMode = "desktop"
+                                targetHwnd = 0L
+                                targetWindowTitle = "Full Desktop"
+                                sendAction(JSONObject().apply {
+                                    put("type", "set_target")
+                                    put("mode", "desktop")
+                                    put("monitor", selectedMonitorId)
+                                })
+                                showWindowPickerSheet = false
+                            },
+                        shape = RoundedCornerShape(12.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = if (targetMode == "desktop") Color(0xFF1E293B) else Color(0xFF131C2E)
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (targetMode == "desktop") Color(0xFF38BDF8) else Color(0xFF334155)
+                        )
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .background(Color(0xFF38BDF8).copy(alpha = 0.2f), RoundedCornerShape(8.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    Icons.Rounded.DesktopWindows,
+                                    contentDescription = null,
+                                    tint = Color(0xFF38BDF8),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "Full PC Desktop (All Apps & Taskbar)",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = Color.White
+                                )
+                                Text(
+                                    text = "Control entire PC with taskbar and multi-windows",
+                                    fontSize = 10.sp,
+                                    color = Color(0xFF94A3B8)
+                                )
+                            }
+
+                            if (targetMode == "desktop") {
+                                Icon(
+                                    Icons.Rounded.CheckCircle,
+                                    contentDescription = "Active",
+                                    tint = Color(0xFF38BDF8),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = "ISOLATED APP WINDOWS",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = Color(0xFF64748B),
+                        modifier = Modifier.padding(top = 4.dp)
+                    )
+
+                    if (activeWindows.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 12.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "No other running app windows detected.\nTap refresh button above to update.",
+                                color = Color(0xFF64748B),
+                                fontSize = 12.sp,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    } else {
+                        activeWindows.forEach { win ->
+                            val isCurrent = (targetMode == "window" && targetHwnd == win.hwnd)
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        triggerHaptic()
+                                        targetMode = "window"
+                                        targetHwnd = win.hwnd
+                                        targetWindowTitle = win.title
+                                        sendAction(JSONObject().apply {
+                                            put("type", "set_target")
+                                            put("mode", "window")
+                                            put("hwnd", win.hwnd)
+                                        })
+                                        showWindowPickerSheet = false
+                                    },
+                                shape = RoundedCornerShape(12.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isCurrent) Color(0xFF1E293B) else Color(0xFF131C2E)
+                                ),
+                                border = androidx.compose.foundation.BorderStroke(
+                                    1.dp,
+                                    if (isCurrent) Color(0xFF10B981) else Color(0xFF334155)
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(12.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .background(Color(0xFF6366F1).copy(alpha = 0.2f), RoundedCornerShape(8.dp)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            Icons.Rounded.Window,
+                                            contentDescription = null,
+                                            tint = Color(0xFFA78BFA),
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = win.title,
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Medium,
+                                            color = Color.White,
+                                            maxLines = 1
+                                        )
+                                        Text(
+                                            text = "${win.width} × ${win.height} px • Isolated",
+                                            fontSize = 10.sp,
+                                            color = Color(0xFF94A3B8)
+                                        )
+                                    }
+
+                                    if (isCurrent) {
+                                        Icon(
+                                            Icons.Rounded.CheckCircle,
+                                            contentDescription = "Active",
+                                            tint = Color(0xFF10B981),
+                                            modifier = Modifier.size(20.dp)
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }

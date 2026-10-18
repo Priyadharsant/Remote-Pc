@@ -85,11 +85,57 @@ class BITMAPINFO(ctypes.Structure):
         ('bmiColors', wintypes.DWORD * 3)
     ]
 
-# Explicit 64-bit Win32 GDI function signatures to prevent pointer truncation
+# Explicit 64-bit Win32 GDI & User32 function signatures to prevent pointer truncation
 user32.GetDC.restype = HDC
 user32.GetDC.argtypes = [wintypes.HWND]
 user32.ReleaseDC.restype = ctypes.c_int
 user32.ReleaseDC.argtypes = [wintypes.HWND, HDC]
+
+user32.IsWindow.restype = wintypes.BOOL
+user32.IsWindow.argtypes = [wintypes.HWND]
+
+user32.IsIconic.restype = wintypes.BOOL
+user32.IsIconic.argtypes = [wintypes.HWND]
+
+user32.ShowWindow.restype = wintypes.BOOL
+user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+
+user32.SetForegroundWindow.restype = wintypes.BOOL
+user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+
+user32.GetForegroundWindow.restype = wintypes.HWND
+user32.GetForegroundWindow.argtypes = []
+
+user32.GetWindowRect.restype = wintypes.BOOL
+user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+
+user32.PrintWindow.restype = wintypes.BOOL
+user32.PrintWindow.argtypes = [wintypes.HWND, HDC, wintypes.UINT]
+
+user32.GetWindowLongW.restype = wintypes.LONG
+user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+
+user32.GetWindowTextLengthW.restype = ctypes.c_int
+user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+
+user32.GetWindowTextW.restype = ctypes.c_int
+user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+
+user32.IsWindowVisible.restype = wintypes.BOOL
+user32.IsWindowVisible.argtypes = [wintypes.HWND]
+
+user32.GetWindow.restype = wintypes.HWND
+user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+
+def is_window_valid(hwnd: Any) -> bool:
+    """Safely checks if an HWND is a currently existing, valid window handle."""
+    try:
+        if not hwnd:
+            return False
+        h = wintypes.HWND(int(hwnd))
+        return bool(user32.IsWindow(h))
+    except Exception:
+        return False
 
 gdi32.CreateCompatibleDC.restype = HDC
 gdi32.CreateCompatibleDC.argtypes = [HDC]
@@ -351,13 +397,126 @@ def capture_screen_jpeg(monitor_idx: int = 1, quality: int = 55, scale: float = 
         img.save(buf, format="JPEG", quality=quality, optimize=False)
         return buf.getvalue(), orig_w, orig_h
 
+class FastWindowCapturer:
+    """
+    Dedicated isolated window capturer using PrintWindow with PW_RENDERFULLCONTENT (flag = 2).
+    Streams only the targeted application window even if it is behind other windows.
+    """
+    def __init__(self):
+        self._lock = threading.Lock()
+        self.dest_w = 0
+        self.dest_h = 0
+        self.sdc = None
+        self.mdc = None
+        self.hbmp = None
+        self.obmp = None
+        self.bits_ptr = ctypes.c_void_p()
+        self.bmi = None
+
+    def _ensure_buffers(self, w: int, h: int):
+        if self.mdc and self.dest_w == w and self.dest_h == h and self.bits_ptr.value:
+            return
+        self.cleanup()
+        self.dest_w = w
+        self.dest_h = h
+        self.sdc = user32.GetDC(0)
+        self.mdc = gdi32.CreateCompatibleDC(self.sdc)
+
+        bmi = BITMAPINFO()
+        bmi.bmiHeader.biSize = ctypes.sizeof(BITMAPINFOHEADER)
+        bmi.bmiHeader.biWidth = w
+        bmi.bmiHeader.biHeight = -h  # top-down DIB
+        bmi.bmiHeader.biPlanes = 1
+        bmi.bmiHeader.biBitCount = 32
+        bmi.bmiHeader.biCompression = 0
+        self.bmi = bmi
+
+        self.bits_ptr = ctypes.c_void_p()
+        self.hbmp = gdi32.CreateDIBSection(
+            self.sdc,
+            ctypes.byref(self.bmi),
+            0,
+            ctypes.byref(self.bits_ptr),
+            None,
+            0
+        )
+        self.obmp = gdi32.SelectObject(self.mdc, self.hbmp)
+
+    def capture(self, hwnd: int, quality: int = 55, scale: float = 1.0) -> Tuple[bytes, int, int]:
+        h_val = wintypes.HWND(int(hwnd))
+        if not user32.IsWindow(h_val):
+            raise ValueError("Invalid HWND")
+
+        if user32.IsIconic(h_val):
+            user32.ShowWindow(h_val, 9)  # SW_RESTORE
+
+        rect = wintypes.RECT()
+        if not user32.GetWindowRect(h_val, ctypes.byref(rect)):
+            raise ValueError("Cannot get window rect")
+
+        orig_w = max(100, rect.right - rect.left)
+        orig_h = max(100, rect.bottom - rect.top)
+
+        with self._lock:
+            self._ensure_buffers(orig_w, orig_h)
+            
+            # Try PrintWindow with PW_RENDERFULLCONTENT (2)
+            ok = user32.PrintWindow(h_val, self.mdc, 2)
+            if not ok:
+                # Fallback to standard PrintWindow (0)
+                ok = user32.PrintWindow(h_val, self.mdc, 0)
+            
+            # If PrintWindow failed (hardware-accelerated/DirectX windows),
+            # capture window's screen rect directly from desktop DC
+            if not ok:
+                sdc = user32.GetDC(0)
+                gdi32.BitBlt(self.mdc, 0, 0, orig_w, orig_h, sdc, rect.left, rect.top, 0x00CC0020)
+                user32.ReleaseDC(0, sdc)
+
+            raw_data = (ctypes.c_char * (orig_w * orig_h * 4)).from_address(self.bits_ptr.value)
+            img = Image.frombuffer('RGB', (orig_w, orig_h), raw_data, 'raw', 'BGRX', 0, 1)
+
+            if 0.2 <= scale < 0.98:
+                new_w = max(320, int(orig_w * scale))
+                new_h = max(240, int(orig_h * scale))
+                img = img.resize((new_w, new_h), Image.Resampling.BILINEAR)
+
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=quality, subsampling=2, optimize=False)
+            return buf.getvalue(), orig_w, orig_h
+
+    def cleanup(self):
+        if self.mdc:
+            if self.obmp:
+                gdi32.SelectObject(self.mdc, self.obmp)
+                self.obmp = None
+            if self.hbmp:
+                gdi32.DeleteObject(self.hbmp)
+                self.hbmp = None
+            gdi32.DeleteDC(self.mdc)
+            self.mdc = None
+        if self.sdc:
+            user32.ReleaseDC(0, self.sdc)
+            self.sdc = None
+        self.bits_ptr = ctypes.c_void_p()
+
+_window_capturer = FastWindowCapturer()
+
+def capture_window_jpeg(hwnd: int, quality: int = 55, scale: float = 1.0) -> Tuple[bytes, int, int]:
+    """Captures an isolated application window in background without desktop interference."""
+    ensure_desktop_access()
+    return _window_capturer.capture(hwnd, quality=quality, scale=scale)
+
 def handle_input_action(data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Processes incoming touch, mouse, and keyboard commands from the mobile client.
-    Supports both Direct Touch Mode (normalized coordinates) and Virtual Trackpad Mode.
+    Supports both Direct Touch Mode (normalized coordinates) and Virtual Trackpad Mode,
+    with automatic coordinate mapping for isolated application windows.
     """
     action_type = data.get("type", "")
     mon_id = int(data.get("monitor", 1))
+    mode = data.get("mode", "desktop")
+    hwnd = data.get("hwnd")
     
     # Retrieve target monitor geometry
     monitors = get_monitors_info()
@@ -368,14 +527,45 @@ def handle_input_action(data: Dict[str, Any]) -> Dict[str, Any]:
     mon_width = mon["width"] if mon else 1920
     mon_height = mon["height"] if mon else 1080
 
-    def to_screen_coords(x: float, y: float, is_norm: bool) -> Tuple[int, int]:
-        if is_norm:
-            px = mon_left + int(max(0.0, min(1.0, x)) * mon_width)
-            py = mon_top + int(max(0.0, min(1.0, y)) * mon_height)
+    if mode == "window" and hwnd and is_window_valid(hwnd):
+        h_val = wintypes.HWND(int(hwnd))
+        rect = wintypes.RECT()
+        if user32.GetWindowRect(h_val, ctypes.byref(rect)):
+            win_left = rect.left
+            win_top = rect.top
+            win_width = max(1, rect.right - rect.left)
+            win_height = max(1, rect.bottom - rect.top)
+
+            if user32.IsIconic(h_val):
+                user32.ShowWindow(h_val, 9)
+            user32.SetForegroundWindow(h_val)
+
+            def to_screen_coords(x: float, y: float, is_norm: bool) -> Tuple[int, int]:
+                if is_norm:
+                    px = win_left + int(max(0.0, min(1.0, x)) * win_width)
+                    py = win_top + int(max(0.0, min(1.0, y)) * win_height)
+                else:
+                    px = win_left + int(x)
+                    py = win_top + int(y)
+                return px, py
         else:
-            px = mon_left + int(x)
-            py = mon_top + int(y)
-        return px, py
+            def to_screen_coords(x: float, y: float, is_norm: bool) -> Tuple[int, int]:
+                if is_norm:
+                    px = mon_left + int(max(0.0, min(1.0, x)) * mon_width)
+                    py = mon_top + int(max(0.0, min(1.0, y)) * mon_height)
+                else:
+                    px = mon_left + int(x)
+                    py = mon_top + int(y)
+                return px, py
+    else:
+        def to_screen_coords(x: float, y: float, is_norm: bool) -> Tuple[int, int]:
+            if is_norm:
+                px = mon_left + int(max(0.0, min(1.0, x)) * mon_width)
+                py = mon_top + int(max(0.0, min(1.0, y)) * mon_height)
+            else:
+                px = mon_left + int(x)
+                py = mon_top + int(y)
+            return px, py
 
     if action_type == "mouse_move":
         x = float(data.get("x", 0))
@@ -483,51 +673,122 @@ def pack_frame(frame_bytes: bytes, monitor_id: int, width: int, height: int, fra
     header = struct.pack(HEADER_FORMAT, MAGIC_BYTES, monitor_id, width, height, frame_id % 65536)
     return header + frame_bytes
 
-def get_audio_input_device() -> Optional[int]:
-    """Finds best audio device to record PC output (Stereo Mix or default input)."""
-    try:
-        import sounddevice as sd
-        devices = sd.query_devices()
-        for idx, d in enumerate(devices):
-            if 'Stereo Mix' in d['name'] and d['max_input_channels'] > 0:
-                return idx
-        return sd.default.device[0]
-    except Exception:
-        return None
-
 def generate_audio_stream():
-    """Generates a streamable WAV audio feed of the Windows master sound output."""
+    """
+    Generates a high-fidelity digital streamable WAV audio feed of Windows master sound output.
+    Uses native Windows Core Audio WASAPI Loopback to capture 100% digital bit-perfect system audio
+    (YouTube, games, media players, browser) with zero microphone noise or room acoustics.
+    """
     try:
-        import sounddevice as sd
-        dev_idx = get_audio_input_device()
-        if dev_idx is None:
-            return
-        
-        sample_rate = 44100
-        channels = 2
-        block_size = 2048
-        
-        # Streamable WAV header
-        header = io.BytesIO()
-        header.write(b'RIFF')
-        header.write(struct.pack('<I', 0x7FFFFFFF))
-        header.write(b'WAVEfmt ')
-        header.write(struct.pack('<I', 16))
-        header.write(struct.pack('<H', 1))
-        header.write(struct.pack('<H', channels))
-        header.write(struct.pack('<I', sample_rate))
-        header.write(struct.pack('<I', sample_rate * channels * 2))
-        header.write(struct.pack('<H', channels * 2))
-        header.write(struct.pack('<H', 16))
-        header.write(b'data')
-        header.write(struct.pack('<I', 0x7FFFFFFF))
-        yield header.getvalue()
-        
-        with sd.RawInputStream(samplerate=sample_rate, channels=channels, device=dev_idx, dtype='int16', blocksize=block_size) as stream:
+        import comtypes
+        from comtypes import GUID, COMMETHOD, HRESULT, POINTER
+        from ctypes import c_uint32, c_uint64, string_at
+        from ctypes.wintypes import DWORD, BYTE
+        from pycaw.pycaw import AudioUtilities, IAudioClient
+        import numpy as np
+
+        class IAudioCaptureClient(comtypes.IUnknown):
+            _iid_ = GUID('{C8ADBD64-E71E-48a0-A4DE-185C395CD317}')
+            _methods_ = [
+                COMMETHOD([], HRESULT, 'GetBuffer',
+                          (['out'], POINTER(POINTER(BYTE)), 'ppData'),
+                          (['out'], POINTER(c_uint32), 'pNumFramesToRead'),
+                          (['out'], POINTER(DWORD), 'pdwFlags'),
+                          (['out'], POINTER(c_uint64), 'pu64DevicePosition'),
+                          (['out'], POINTER(c_uint64), 'pu64QPCPosition')),
+                COMMETHOD([], HRESULT, 'ReleaseBuffer',
+                          (['in'], c_uint32, 'NumFramesRead')),
+                COMMETHOD([], HRESULT, 'GetNextPacketSize',
+                          (['out'], POINTER(c_uint32), 'pNumFramesInNextPacket'))
+            ]
+
+        comtypes.CoInitialize()
+        client = None
+        try:
+            device = AudioUtilities.GetSpeakers()
+            if not device or not hasattr(device, "_dev") or not device._dev:
+                return
+
+            client = device._dev.Activate(IAudioClient._iid_, comtypes.CLSCTX_ALL, None).QueryInterface(IAudioClient)
+            mix_fmt = client.GetMixFormat()
+
+            sample_rate = int(mix_fmt.contents.nSamplesPerSec)
+            channels = int(mix_fmt.contents.nChannels)
+            bits = int(mix_fmt.contents.wBitsPerSample)
+
+            out_sample_rate = sample_rate
+            out_channels = min(channels, 2)
+            out_bits = 16
+
+            # 44-byte streamable WAV header
+            header = io.BytesIO()
+            header.write(b'RIFF')
+            header.write(struct.pack('<I', 0x7FFFFFFF))
+            header.write(b'WAVEfmt ')
+            header.write(struct.pack('<I', 16))
+            header.write(struct.pack('<H', 1))  # PCM
+            header.write(struct.pack('<H', out_channels))
+            header.write(struct.pack('<I', out_sample_rate))
+            header.write(struct.pack('<I', out_sample_rate * out_channels * 2))
+            header.write(struct.pack('<H', out_channels * 2))
+            header.write(struct.pack('<H', out_bits))
+            header.write(b'data')
+            header.write(struct.pack('<I', 0x7FFFFFFF))
+            yield header.getvalue()
+
+            # AUDCLNT_STREAMFLAGS_LOOPBACK = 0x00020000
+            # AUDCLNT_SHAREMODE_SHARED = 0
+            hns_buffer_duration = 10000000  # 1-second buffer
+            client.Initialize(0, 0x00020000, hns_buffer_duration, 0, mix_fmt, None)
+            capture_client = client.GetService(IAudioCaptureClient._iid_).QueryInterface(IAudioCaptureClient)
+            client.Start()
+
             while True:
-                data, overflowed = stream.read(block_size)
-                if data:
-                    yield bytes(data)
+                packet_size = capture_client.GetNextPacketSize()
+                if packet_size == 0:
+                    time.sleep(0.005)
+                    continue
+
+                chunk_bytes = bytearray()
+                while packet_size > 0:
+                    p_data, num_frames, flags, dev_pos, qpc_pos = capture_client.GetBuffer()
+                    if num_frames > 0:
+                        if flags & 2:  # AUDCLNT_BUFFERFLAGS_SILENT
+                            chunk_bytes.extend(bytes(num_frames * out_channels * 2))
+                        else:
+                            if bits == 32:
+                                raw_floats = string_at(p_data, num_frames * channels * 4)
+                                arr = np.frombuffer(raw_floats, dtype=np.float32)
+                                if channels > 2 and out_channels == 2:
+                                    arr = arr.reshape(-1, channels)[:, :2].flatten()
+                                pcm16 = (np.clip(arr, -1.0, 1.0) * 32767.0).astype(np.int16).tobytes()
+                                chunk_bytes.extend(pcm16)
+                            elif bits == 16:
+                                raw_int16 = string_at(p_data, num_frames * channels * 2)
+                                if channels > 2 and out_channels == 2:
+                                    arr = np.frombuffer(raw_int16, dtype=np.int16).reshape(-1, channels)[:, :2].flatten()
+                                    chunk_bytes.extend(arr.tobytes())
+                                else:
+                                    chunk_bytes.extend(raw_int16)
+                            else:
+                                chunk_bytes.extend(bytes(num_frames * out_channels * 2))
+                        capture_client.ReleaseBuffer(num_frames)
+                    packet_size = capture_client.GetNextPacketSize()
+
+                if chunk_bytes:
+                    yield bytes(chunk_bytes)
+
+        finally:
+            if client:
+                try:
+                    client.Stop()
+                except Exception:
+                    pass
+            try:
+                comtypes.CoUninitialize()
+            except Exception:
+                pass
+
     except Exception as e:
-        print("[RemoteAudio] Stream error:", e)
+        print("[RemoteAudio] Direct WASAPI loopback stream error:", e)
 

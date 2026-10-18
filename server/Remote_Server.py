@@ -1116,17 +1116,20 @@ async def ws_remote_desktop(websocket: WebSocket, password: str | None = Query(d
     log_server_event(f"Remote Desktop connected from {client_ip}", "SUCCESS")
 
     settings = {
+        "mode": "desktop",
         "monitor": 1,
+        "hwnd": None,
         "quality": 55,
         "scale": 0.85,
         "fps": 35,
         "active": True
     }
 
-    # Initial monitor handshake
+    # Initial monitor and window handshake
     mons = remote_desktop.get_monitors_info()
+    windows = remote_desktop.get_active_windows()
     try:
-        await websocket.send_json({"type": "init", "monitors": mons})
+        await websocket.send_json({"type": "init", "monitors": mons, "windows": windows})
     except Exception:
         return
 
@@ -1137,13 +1140,37 @@ async def ws_remote_desktop(websocket: WebSocket, password: str | None = Query(d
             fps = max(5, min(60, settings["fps"]))
             interval = 1.0 / fps
             try:
-                mon_id = settings["monitor"]
+                mode = settings.get("mode", "desktop")
                 quality = settings["quality"]
                 scale = settings["scale"]
-                jpeg_bytes, w, h = await asyncio.to_thread(
-                    remote_desktop.capture_screen_jpeg, mon_id, quality, scale
-                )
-                packet = remote_desktop.pack_frame(jpeg_bytes, mon_id, w, h, frame_id)
+                mon_id = settings["monitor"]
+                hwnd = settings.get("hwnd")
+
+                if mode == "window" and hwnd:
+                    try:
+                        jpeg_bytes, w, h = await asyncio.to_thread(
+                            remote_desktop.capture_window_jpeg, hwnd, quality, scale
+                        )
+                        packet = remote_desktop.pack_frame(jpeg_bytes, 0, w, h, frame_id)
+                    except Exception:
+                        # Only fall back to full desktop if the target window was closed/destroyed
+                        if not remote_desktop.is_window_valid(hwnd):
+                            settings["mode"] = "desktop"
+                            settings["hwnd"] = None
+                            try:
+                                await websocket.send_json({"type": "target_fallback", "mode": "desktop"})
+                            except Exception:
+                                pass
+                        jpeg_bytes, w, h = await asyncio.to_thread(
+                            remote_desktop.capture_screen_jpeg, mon_id, quality, scale
+                        )
+                        packet = remote_desktop.pack_frame(jpeg_bytes, mon_id, w, h, frame_id)
+                else:
+                    jpeg_bytes, w, h = await asyncio.to_thread(
+                        remote_desktop.capture_screen_jpeg, mon_id, quality, scale
+                    )
+                    packet = remote_desktop.pack_frame(jpeg_bytes, mon_id, w, h, frame_id)
+
                 await websocket.send_bytes(packet)
                 frame_id += 1
             except Exception:
@@ -1166,6 +1193,26 @@ async def ws_remote_desktop(websocket: WebSocket, password: str | None = Query(d
                 msg_type = data.get("type")
                 if msg_type == "set_monitor":
                     settings["monitor"] = int(data.get("monitor", 1))
+                    settings["mode"] = "desktop"
+                elif msg_type == "set_target":
+                    mode = data.get("mode", "desktop")
+                    settings["mode"] = mode
+                    if mode == "window":
+                        h = int(data.get("hwnd", 0))
+                        settings["hwnd"] = h
+                        if h and remote_desktop.is_window_valid(h):
+                            try:
+                                h_val = remote_desktop.wintypes.HWND(h)
+                                if remote_desktop.user32.IsIconic(h_val):
+                                    remote_desktop.user32.ShowWindow(h_val, 9)
+                                remote_desktop.user32.SetForegroundWindow(h_val)
+                            except Exception:
+                                pass
+                    else:
+                        settings["monitor"] = int(data.get("monitor", 1))
+                elif msg_type == "get_windows":
+                    windows = await asyncio.to_thread(remote_desktop.get_active_windows)
+                    await websocket.send_json({"type": "window_list", "windows": windows})
                 elif msg_type == "set_quality":
                     if "quality" in data:
                         settings["quality"] = int(data["quality"])
