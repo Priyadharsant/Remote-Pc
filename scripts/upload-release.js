@@ -253,7 +253,8 @@ async function main() {
   const checksumLines = [];
   let latestYmlPath = null;
 
-  if (hasExe) {
+  // Generate checksum lines for all available binaries on disk
+  if (fs.existsSync(exePath)) {
     const exeStats = fs.statSync(exePath);
     console.log(`Found Windows Installer: Remote_PC_Setup.exe (${(exeStats.size / (1024 * 1024)).toFixed(1)} MB)`);
     const sha512 = computeSha512(exePath);
@@ -273,7 +274,7 @@ async function main() {
     checksumLines.push(`${computeSha256(exePath)}  Remote_PC_Setup.exe`);
   }
 
-  if (hasApk) {
+  if (fs.existsSync(apkPath)) {
     const apkStats = fs.statSync(apkPath);
     console.log(`Found Android APK:       Remote PC.apk (${(apkStats.size / (1024 * 1024)).toFixed(1)} MB)`);
     checksumLines.push(`${computeSha256(apkPath)}  Remote PC.apk`);
@@ -313,27 +314,37 @@ async function main() {
       .replace(/[\s._-]+/g, "")
       .trim();
 
-  // 3. Delete conflicting assets with identical names
-  for (const asset of release.assets || []) {
-    if (filesToUpload.some((f) => normalizeName(f.name) === normalizeName(asset.name))) {
-      console.log(`Removing old asset ${asset.name} (id: ${asset.id})...`);
+  // 3. Skip assets that are already uploaded with matching size, delete outdated or corrupt assets
+  const filesPendingUpload = [];
+  for (const item of filesToUpload) {
+    const fileStats = fs.statSync(item.localPath);
+    const existing = (release.assets || []).find(
+      (a) => normalizeName(a.name) === normalizeName(item.name)
+    );
+    if (existing) {
+      if (existing.state === "uploaded" && Number(existing.size) === fileStats.size) {
+        console.log(`✓ [${item.name}] Already uploaded with identical size (${(fileStats.size / (1024 * 1024)).toFixed(1)} MB). Skipping.`);
+        continue;
+      }
+      console.log(`Removing old/partial asset ${existing.name} (id: ${existing.id})...`);
       await fetch(
-        `https://api.github.com/repos/${OWNER}/${REPO}/releases/assets/${asset.id}`,
+        `https://api.github.com/repos/${OWNER}/${REPO}/releases/assets/${existing.id}`,
         {
           method: "DELETE",
           headers,
         }
       );
     }
+    filesPendingUpload.push(item);
   }
 
-  // 4. Upload all assets sequentially using high-speed streaming with retry
-  console.log(`\n🚀 Uploading ${filesToUpload.length} release assets sequentially...`);
+  // 4. Upload all pending assets sequentially using high-speed streaming with retry
+  console.log(`\n🚀 Uploading ${filesPendingUpload.length} release assets sequentially...`);
   const baseUploadUrl = release.upload_url
     ? release.upload_url.replace(/\{.*\}/, "")
     : `https://uploads.github.com/repos/${OWNER}/${REPO}/releases/${release.id}/assets`;
 
-  for (const item of filesToUpload) {
+  for (const item of filesPendingUpload) {
     const fileStats = fs.statSync(item.localPath);
     const uploadUrl = `${baseUploadUrl}?name=${encodeURIComponent(item.name)}`;
     console.log(`\nUploading ${item.name} (${(fileStats.size / (1024 * 1024)).toFixed(1)} MB)...`);
