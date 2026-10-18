@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "start": "node scripts/menu.js",
+    "menu": "node scripts/menu.js",
     "build:exe": "python build_exe.py",
     "build:fast": "python build_exe.py --fast",
     "build:installer": "python build_exe.py --installer-only",
