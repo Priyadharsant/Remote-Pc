@@ -7,23 +7,6 @@ interface TitleBarProps {
   onRefresh?: () => void;
 }
 
-declare global {
-  interface Window {
-    electronAPI?: {
-      minimizeWindow: () => void;
-      maximizeWindow: () => void;
-      closeWindow: () => void;
-      hideToTray: () => void;
-      isMaximized: () => Promise<boolean>;
-      openExternalFolder: (path?: string) => Promise<boolean>;
-      openFileItem: (path: string) => Promise<boolean>;
-      launchScrcpy: (phoneIp?: string) => Promise<{ success: boolean; error?: string }>;
-      startServer?: () => Promise<{ success: boolean; error?: string }>;
-      openExternalUrl?: (url: string) => Promise<boolean>;
-    };
-  }
-}
-
 export const TitleBar: React.FC<TitleBarProps> = ({ isOnline, connectedPhone, onRefresh }) => {
   const [isMax, setIsMax] = useState(false);
   const [isStartingServer, setIsStartingServer] = useState(false);

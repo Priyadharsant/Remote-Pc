@@ -4,13 +4,15 @@ import {
   RefreshCw, CheckCircle2, Download, Sparkles
 } from 'lucide-react';
 import { api } from '../api';
+import { APP_VERSION } from '../version';
 import type { TrustedDevice } from '../types';
 
 interface SettingsProps {
   onRefresh: () => void;
+  onOpenUpdateModal?: () => void;
 }
 
-export const Settings: React.FC<SettingsProps> = ({ onRefresh }) => {
+export const Settings: React.FC<SettingsProps> = ({ onRefresh, onOpenUpdateModal }) => {
   const [trustedDevices, setTrustedDevices] = useState<TrustedDevice[]>([]);
   const [autoConnect, setAutoConnect] = useState<boolean>(true);
   const [autoStartWindows, setAutoStartWindows] = useState<boolean>(true);
@@ -235,16 +237,22 @@ export const Settings: React.FC<SettingsProps> = ({ onRefresh }) => {
             </div>
             <div>
               <h3 className="font-bold text-sm text-slate-100">Software Updates</h3>
-              <p className="text-[11px] text-slate-400">Current version: v3.0.0 (GitHub Releases)</p>
+              <p className="text-[11px] text-slate-400">Current version: v{APP_VERSION} (GitHub Releases)</p>
             </div>
           </div>
           <button
-            onClick={handleCheckUpdate}
+            onClick={() => {
+              if (onOpenUpdateModal) {
+                onOpenUpdateModal();
+              } else {
+                handleCheckUpdate();
+              }
+            }}
             disabled={checkingUpdate || installingUpdate}
             className="px-3 py-1.5 rounded-xl bg-cyan-500/20 hover:bg-cyan-500/30 text-cyan-300 border border-cyan-500/30 font-semibold text-xs transition flex items-center gap-1.5 disabled:opacity-50"
           >
             <RefreshCw size={13} className={checkingUpdate ? 'animate-spin' : ''} />
-            <span>{checkingUpdate ? 'Checking GitHub...' : 'Check for Updates'}</span>
+            <span>Check for Updates</span>
           </button>
         </div>
 

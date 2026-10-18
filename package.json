@@ -1,0 +1,20 @@
+{
+  "name": "remote-pc-workspace",
+  "version": "3.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:exe": "python build_exe.py",
+    "build:apk": "powershell -Command \"Set-Location client; .\\gradlew.bat assembleDebug; Copy-Item 'app\\build\\outputs\\apk\\debug\\app-debug.apk' '..\\Remote PC.apk' -Force\"",
+    "build:all": "npm run build:apk && npm run build:exe",
+    "bump": "node scripts/bump-version.js",
+    "version:patch": "node scripts/bump-version.js patch",
+    "version:minor": "node scripts/bump-version.js minor",
+    "version:major": "node scripts/bump-version.js major",
+    "release": "node scripts/bump-version.js --release",
+    "release:patch": "node scripts/bump-version.js patch --release",
+    "release:minor": "node scripts/bump-version.js minor --release",
+    "release:major": "node scripts/bump-version.js major --release",
+    "upload": "node scripts/upload-release.js"
+  }
+}

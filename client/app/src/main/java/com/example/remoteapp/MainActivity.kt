@@ -658,9 +658,25 @@ class MainActivity : FragmentActivity() {
                     var passwordVisible by remember { mutableStateOf(false) }
                     var saveDeviceChecked by remember { mutableStateOf(true) }
                     var deviceToConnect by remember { mutableStateOf<Pair<String, String>?>(null) }
+                    var pendingUpdate by remember { mutableStateOf<GithubReleaseInfo?>(null) }
+                    var showStartupUpdateDialog by remember { mutableStateOf(false) }
+                    var isDownloadingStartupUpdate by remember { mutableStateOf(false) }
+                    var startupUpdateProgress by remember { mutableFloatStateOf(0f) }
 
                     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
                     val scope = rememberCoroutineScope()
+
+                    LaunchedEffect(Unit) {
+                        scope.launch(Dispatchers.IO) {
+                            val update = AppUpdater.checkUpdate()
+                            if (update != null && update.hasUpdate) {
+                                withContext(Dispatchers.Main) {
+                                    pendingUpdate = update
+                                    showStartupUpdateDialog = true
+                                }
+                            }
+                        }
+                    }
 
                     fun fetchStatus(target: String, pass: String) {
                         scope.launch(Dispatchers.IO) {
@@ -1295,6 +1311,75 @@ class MainActivity : FragmentActivity() {
                                 onDismiss = { showPasswordDialog = false },
                                 onConfirm = {
                                     verifyAndConnect(deviceToConnect!!, passwordInput, saveDeviceChecked)
+                                }
+                            )
+                        }
+
+                        if (showStartupUpdateDialog && pendingUpdate != null) {
+                            val info = pendingUpdate!!
+                            AlertDialog(
+                                onDismissRequest = { if (!isDownloadingStartupUpdate) showStartupUpdateDialog = false },
+                                containerColor = AppTheme.CardDarkElevated,
+                                title = {
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Rounded.SystemUpdate, null, tint = AppTheme.AccentCyan, modifier = Modifier.size(24.dp))
+                                        Spacer(Modifier.width(8.dp))
+                                        Text("New Update Available", color = AppTheme.TextPrimary, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                                    }
+                                },
+                                text = {
+                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Text("Version ${info.latestVersion} is available!", fontWeight = FontWeight.SemiBold, color = AppTheme.AccentCyan, fontSize = 13.sp)
+                                        Text(info.notes, color = AppTheme.TextSecondary, fontSize = 12.sp, maxLines = 6)
+                                        if (isDownloadingStartupUpdate) {
+                                            Spacer(Modifier.height(8.dp))
+                                            LinearProgressIndicator(
+                                                progress = { startupUpdateProgress },
+                                                modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(3.dp)),
+                                                color = AppTheme.AccentCyan,
+                                                trackColor = AppTheme.CardDark
+                                            )
+                                            Text(
+                                                "Downloading: ${(startupUpdateProgress * 100).toInt()}%",
+                                                fontSize = 11.sp,
+                                                color = AppTheme.TextSecondary
+                                            )
+                                        }
+                                    }
+                                },
+                                confirmButton = {
+                                    Button(
+                                        onClick = {
+                                            isDownloadingStartupUpdate = true
+                                            scope.launch {
+                                                AppUpdater.downloadAndInstallApk(
+                                                    context = this@MainActivity,
+                                                    apkUrl = info.apkUrl,
+                                                    onProgress = { p -> startupUpdateProgress = p },
+                                                    onDownloaded = {
+                                                        isDownloadingStartupUpdate = false
+                                                        showStartupUpdateDialog = false
+                                                        Toast.makeText(this@MainActivity, "Installing update...", Toast.LENGTH_SHORT).show()
+                                                    },
+                                                    onError = { err ->
+                                                        isDownloadingStartupUpdate = false
+                                                        Toast.makeText(this@MainActivity, "Update error: $err", Toast.LENGTH_LONG).show()
+                                                    }
+                                                )
+                                            }
+                                        },
+                                        enabled = !isDownloadingStartupUpdate,
+                                        colors = ButtonDefaults.buttonColors(containerColor = AppTheme.AccentCyan)
+                                    ) {
+                                        Text(if (isDownloadingStartupUpdate) "Downloading..." else "Download & Install", color = AppTheme.BackgroundDark, fontWeight = FontWeight.Bold)
+                                    }
+                                },
+                                dismissButton = {
+                                    if (!isDownloadingStartupUpdate) {
+                                        TextButton(onClick = { showStartupUpdateDialog = false }) {
+                                            Text("Later", color = AppTheme.TextSecondary)
+                                        }
+                                    }
                                 }
                             )
                         }

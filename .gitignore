@@ -96,6 +96,7 @@ config.json
 server/config.json
 server/sent.py
 checksums.txt
+latest.yml
 *.log
 Remote_Server.log
 server/Remote_Server.log

@@ -12,6 +12,9 @@ import { NotificationsCenter } from './components/NotificationsCenter';
 import { Security } from './components/Security';
 import { Settings } from './components/Settings';
 import { SetupWizard } from './components/SetupWizard';
+import { VersionUpdateModal } from './components/VersionUpdateModal';
+import { checkForAppUpdates } from './version';
+import type { AppUpdateData } from './version';
 import { api } from './api';
 import type { ServerStatus, SystemStats, PairingRequest } from './types';
 
@@ -21,6 +24,8 @@ export function App() {
   const [status, setStatus] = useState<ServerStatus | null>(null);
   const [stats, setStats] = useState<SystemStats | null>(null);
   const [pairRequests, setPairRequests] = useState<PairingRequest[]>([]);
+  const [updateModalOpen, setUpdateModalOpen] = useState<boolean>(false);
+  const [updateData, setUpdateData] = useState<AppUpdateData | null>(null);
 
   const fetchAllData = useCallback(async () => {
     try {
@@ -52,6 +57,20 @@ export function App() {
     const interval = setInterval(fetchAllData, 3000);
     return () => clearInterval(interval);
   }, [fetchAllData]);
+
+  // Check for updates on startup (modeled after Finance Application)
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      try {
+        const data = await checkForAppUpdates();
+        setUpdateData(data);
+        if (data.hasUpdate) {
+          setUpdateModalOpen(true);
+        }
+      } catch (_) {}
+    }, 2000);
+    return () => clearTimeout(timer);
+  }, []);
 
   const connectedClient = status?.clients && status.clients.length > 0
     ? status.clients[0]?.name
@@ -140,10 +159,18 @@ export function App() {
           {activeTab === 'settings' && (
             <Settings
               onRefresh={fetchAllData}
+              onOpenUpdateModal={() => setUpdateModalOpen(true)}
             />
           )}
         </main>
       </div>
+
+      {/* In-App Auto-Update Modal (modeled after Finance Application) */}
+      <VersionUpdateModal
+        isOpen={updateModalOpen}
+        onClose={() => setUpdateModalOpen(false)}
+        initialUpdateData={updateData}
+      />
     </div>
   );
 }

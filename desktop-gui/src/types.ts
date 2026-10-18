@@ -93,3 +93,33 @@ export interface PhoneNotification {
   content: string;
   time: string;
 }
+
+export interface UpdateProgress {
+  percent: number;
+  transferred: number;
+  total: number;
+  speed?: string;
+  streams?: number;
+}
+
+declare global {
+  interface Window {
+    electronAPI?: {
+      minimizeWindow: () => void;
+      maximizeWindow: () => void;
+      closeWindow: () => void;
+      hideToTray: () => void;
+      isMaximized: () => Promise<boolean>;
+      openExternalFolder: (folderPath?: string) => Promise<boolean>;
+      openFileItem: (filePath: string) => Promise<boolean>;
+      openExternalUrl: (url: string) => Promise<boolean>;
+      openExternal: (url: string) => Promise<boolean>;
+      launchScrcpy: (phoneIp?: string) => Promise<{ success: boolean; message?: string; error?: string }>;
+      startServer: () => Promise<{ success: boolean; error?: string }>;
+      getAppVersion: () => Promise<string>;
+      downloadAndInstallUpdate: (url: string, version: string) => Promise<{ success: boolean; error?: string }>;
+      onUpdateProgress: (callback: (progress: UpdateProgress) => void) => () => void;
+    };
+  }
+}
+
