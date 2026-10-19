@@ -2,7 +2,7 @@
 ; Remote PC Server & Modern React Dashboard Setup Script
 
 #define MyAppName "Remote PC"
-#define MyAppVersion "3.1.0"
+#define MyAppVersion "3.2.0"
 #define MyAppPublisher "Remote PC"
 #define MyAppServerExe "Remote_Server.exe"
 #define MyAppGuiExe "Remote PC GUI.exe"
@@ -48,6 +48,7 @@ Source: "server\logo.png"; DestDir: "{app}"; Flags: ignoreversion
 Source: "server\config.json"; DestDir: "{app}"; Flags: onlyifdoesntexist
 Source: "C:\Users\priya\AppData\Local\Programs\Python\Python312\python312.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "C:\Users\priya\AppData\Local\Programs\Python\Python312\vcruntime140.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "server\bin\ffmpeg.exe"; DestDir: "{app}\bin"; Flags: ignoreversion
 
 ; Modern React + Electron GUI Suite (win-unpacked directory)
 Source: "desktop-gui\dist-electron\win-unpacked\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs

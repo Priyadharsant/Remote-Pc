@@ -728,6 +728,17 @@ class MainActivity : FragmentActivity() {
                 ) {
                     var currentScreen by remember { mutableStateOf("splash") }
                     var selectedDevice by remember { mutableStateOf<Pair<String, String>?>(null) }
+
+                    DisposableEffect(Unit) {
+                        CameraActionBridge.onOpenRequested = {
+                            runOnUiThread {
+                                currentScreen = "camera_record"
+                            }
+                        }
+                        onDispose {
+                            CameraActionBridge.onOpenRequested = null
+                        }
+                    }
                     var sessionPassword by remember { mutableStateOf("") }
                     var discoveredDevices by remember { mutableStateOf<List<Pair<String, String>>>(emptyList()) }
                     var isScanningServers by remember { mutableStateOf(false) }
@@ -1045,6 +1056,17 @@ class MainActivity : FragmentActivity() {
                                         modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
                                     )
                                     NavigationDrawerItem(
+                                        label = { Text("Direct Camera Record", fontWeight = FontWeight.Bold) },
+                                        icon = { Icon(Icons.Rounded.Videocam, null, tint = if (currentScreen == "camera_record") Color(0xFFE11D48) else AppTheme.AccentCyan) },
+                                        selected = currentScreen == "camera_record",
+                                        onClick = { currentScreen = "camera_record"; scope.launch { drawerState.close() } },
+                                        colors = NavigationDrawerItemDefaults.colors(
+                                            selectedContainerColor = Color(0xFFE11D48).copy(alpha = 0.2f),
+                                            selectedTextColor = Color(0xFFFDA4AF)
+                                        ),
+                                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                                    )
+                                    NavigationDrawerItem(
                                         label = { Text("Touchpad Trackpad", fontWeight = FontWeight.Medium) },
                                         icon = { Icon(Icons.Rounded.TouchApp, null, tint = if (currentScreen == "touchpad") AppTheme.AccentCyan else AppTheme.TextSecondary) },
                                         selected = currentScreen == "touchpad",
@@ -1099,6 +1121,17 @@ class MainActivity : FragmentActivity() {
                                         ),
                                         modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
                                     )
+                                    NavigationDrawerItem(
+                                        label = { Text("Auto Folder Sync", fontWeight = FontWeight.Medium) },
+                                        icon = { Icon(Icons.Rounded.Sync, null, tint = AppTheme.AccentEmerald) },
+                                        selected = currentScreen == "folder_sync",
+                                        onClick = { currentScreen = "folder_sync"; scope.launch { drawerState.close() } },
+                                        colors = NavigationDrawerItemDefaults.colors(
+                                            selectedContainerColor = AppTheme.AccentEmerald.copy(alpha = 0.15f),
+                                            selectedTextColor = AppTheme.AccentEmerald
+                                        ),
+                                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                                    )
 
                                     Spacer(Modifier.height(8.dp))
                                     Text(
@@ -1146,7 +1179,7 @@ class MainActivity : FragmentActivity() {
                             currentScreen = if (selectedDevice != null) "remote" else "discovery"
                         }
 
-                        BackHandler(enabled = !drawerState.isOpen && currentScreen in listOf("touchpad", "keyboard", "media", "pc_files", "phone_files", "remote_desktop")) {
+                        BackHandler(enabled = !drawerState.isOpen && currentScreen in listOf("touchpad", "keyboard", "media", "pc_files", "phone_files", "remote_desktop", "camera_record", "folder_sync")) {
                             currentScreen = "remote"
                         }
 
@@ -1311,6 +1344,8 @@ class MainActivity : FragmentActivity() {
                                         onRefreshStatus = { fetchStatus(dev.second, sessionPassword) },
                                         onCommand = { cmd -> sendCommand(cmd, dev.second, sessionPassword) },
                                         onNavigateRemoteDesktop = { currentScreen = "remote_desktop" },
+                                        onNavigateCameraRecord = { currentScreen = "camera_record" },
+                                        onNavigateFolderSync = { currentScreen = "folder_sync" },
                                         onBack = { currentScreen = "discovery" },
                                         onMenuClick = { scope.launch { drawerState.open() } }
                                     )
@@ -1381,6 +1416,25 @@ class MainActivity : FragmentActivity() {
                                         targetIp = host,
                                         password = sessionPassword,
                                         onBack = { currentScreen = "remote" }
+                                    )
+                                }
+                                "camera_record" -> {
+                                    val dev = selectedDevice ?: Pair("PC", "127.0.0.1:5055")
+                                    val host = if (dev.second.contains(":")) dev.second.substringBefore(":") else dev.second
+                                    CameraRecordingScreen(
+                                        targetIp = host,
+                                        password = sessionPassword,
+                                        onBack = { currentScreen = "remote" }
+                                    )
+                                }
+                                "folder_sync" -> {
+                                    val dev = selectedDevice ?: Pair("PC", "127.0.0.1:5055")
+                                    val host = if (dev.second.contains(":")) dev.second.substringBefore(":") else dev.second
+                                    FolderSyncScreen(
+                                        targetIp = host,
+                                        password = sessionPassword,
+                                        onBack = { currentScreen = "remote" },
+                                        onMenuClick = { scope.launch { drawerState.open() } }
                                     )
                                 }
                             }
@@ -2077,6 +2131,8 @@ fun RemoteControlScreen(
     onRefreshStatus: () -> Unit,
     onCommand: (String) -> Unit,
     onNavigateRemoteDesktop: () -> Unit = {},
+    onNavigateCameraRecord: () -> Unit = {},
+    onNavigateFolderSync: () -> Unit = {},
     onBack: () -> Unit,
     onMenuClick: () -> Unit
 ) {
@@ -2150,6 +2206,25 @@ fun RemoteControlScreen(
                         Text("Local Wi-Fi Network", fontSize = 11.sp, color = AppTheme.TextSecondary)
                     }
                     LiveStatusBadge(text = "CONNECTED", color = AppTheme.AccentEmerald)
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+            SectionHeader(title = "CORE REMOTES", accentColor = Color(0xFF818CF8))
+            Spacer(Modifier.height(12.dp))
+
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                LiquidActionTile("Remote Desktop", Icons.Rounded.Monitor, Color(0xFF818CF8), Modifier.weight(1f)) {
+                    onNavigateRemoteDesktop()
+                }
+                LiquidActionTile("Camera to PC", Icons.Rounded.Videocam, Color(0xFFE11D48), Modifier.weight(1f)) {
+                    onNavigateCameraRecord()
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                LiquidActionTile("Auto Folder Sync", Icons.Rounded.Sync, AppTheme.AccentEmerald, Modifier.weight(1f)) {
+                    onNavigateFolderSync()
                 }
             }
 
@@ -2890,6 +2965,39 @@ fun KeyboardScreen(
     onMenuClick: () -> Unit
 ) {
     var textInput by remember { mutableStateOf("") }
+    var isShiftActive by remember { mutableStateOf(false) }
+    var isCtrlActive by remember { mutableStateOf(false) }
+    var isAltActive by remember { mutableStateOf(false) }
+
+    val handleKeyAction: (String) -> Unit = { keyOrChar ->
+        val parts = mutableListOf<String>()
+        if (isCtrlActive) parts.add("ctrl")
+        if (isAltActive) parts.add("alt")
+
+        val isSingleChar = keyOrChar.length == 1 && keyOrChar[0].isLetter()
+
+        if (parts.isNotEmpty()) {
+            if (isShiftActive) parts.add("shift")
+            parts.add(keyOrChar.lowercase())
+            onKey("hotkey:${parts.joinToString("+")}")
+            isCtrlActive = false
+            isAltActive = false
+            isShiftActive = false
+        } else if (isShiftActive) {
+            if (isSingleChar) {
+                onKey("text:${keyOrChar.uppercase()}")
+            } else {
+                onKey("hotkey:shift+${keyOrChar.lowercase()}")
+            }
+            isShiftActive = false
+        } else {
+            if (isSingleChar) {
+                onKey("text:${keyOrChar.lowercase()}")
+            } else {
+                onKey("key:${keyOrChar.lowercase()}")
+            }
+        }
+    }
 
     Scaffold(
         containerColor = AppTheme.BackgroundDark,
@@ -2963,19 +3071,23 @@ fun KeyboardScreen(
             // Top Function Keys
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    KeyBtn("ESC", Modifier.weight(1f), accent = true) { onKey("key:esc") }
-                    KeyBtn("TAB", Modifier.weight(1f), accent = true) { onKey("key:tab") }
+                    KeyBtn("ESC", Modifier.weight(1f), accent = true) { handleKeyAction("esc") }
+                    KeyBtn("TAB", Modifier.weight(1f), accent = true) { handleKeyAction("tab") }
                     KeyBtn("WIN", Modifier.weight(1f), accent = true) { onKey("key:win") }
-                    KeyBtn("ALT", Modifier.weight(1f), accent = true) { onKey("key:alt") }
-                    KeyBtn("CTRL", Modifier.weight(1f), accent = true) { onKey("key:ctrl") }
+                    KeyBtn("ALT", Modifier.weight(1f), accent = true, active = isAltActive) {
+                        isAltActive = !isAltActive
+                    }
+                    KeyBtn("CTRL", Modifier.weight(1f), accent = true, active = isCtrlActive) {
+                        isCtrlActive = !isCtrlActive
+                    }
                 }
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                    KeyBtn("F5", Modifier.weight(1f)) { onKey("key:f5") }
-                    KeyBtn("F11", Modifier.weight(1f)) { onKey("key:f11") }
-                    KeyBtn("HOME", Modifier.weight(1f)) { onKey("key:home") }
-                    KeyBtn("END", Modifier.weight(1f)) { onKey("key:end") }
-                    KeyBtn("DEL", Modifier.weight(1f), accent = true) { onKey("key:delete") }
+                    KeyBtn("F5", Modifier.weight(1f)) { handleKeyAction("f5") }
+                    KeyBtn("F11", Modifier.weight(1f)) { handleKeyAction("f11") }
+                    KeyBtn("HOME", Modifier.weight(1f)) { handleKeyAction("home") }
+                    KeyBtn("END", Modifier.weight(1f)) { handleKeyAction("end") }
+                    KeyBtn("DEL", Modifier.weight(1f), accent = true) { handleKeyAction("delete") }
                 }
             }
 
@@ -2984,29 +3096,34 @@ fun KeyboardScreen(
                 val r1 = listOf("Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P")
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     for (k in r1) {
-                        KeyBtn(k, Modifier.weight(1f)) { onKey("text:${k.lowercase()}") }
+                        val display = if (isShiftActive) k.uppercase() else k.lowercase()
+                        KeyBtn(display, Modifier.weight(1f)) { handleKeyAction(k) }
                     }
                 }
 
                 val r2 = listOf("A", "S", "D", "F", "G", "H", "J", "K", "L")
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                     for (k in r2) {
-                        KeyBtn(k, Modifier.weight(1f)) { onKey("text:${k.lowercase()}") }
+                        val display = if (isShiftActive) k.uppercase() else k.lowercase()
+                        KeyBtn(display, Modifier.weight(1f)) { handleKeyAction(k) }
                     }
                 }
 
                 val r3 = listOf("Z", "X", "C", "V", "B", "N", "M")
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    KeyBtn("SHIFT", Modifier.weight(1.4f), accent = true) { onKey("key:shift") }
-                    for (k in r3) {
-                        KeyBtn(k, Modifier.weight(1f)) { onKey("text:${k.lowercase()}") }
+                    KeyBtn("SHIFT", Modifier.weight(1.4f), accent = true, active = isShiftActive) {
+                        isShiftActive = !isShiftActive
                     }
-                    KeyBtn("⌫", Modifier.weight(1.4f), accent = true) { onKey("key:backspace") }
+                    for (k in r3) {
+                        val display = if (isShiftActive) k.uppercase() else k.lowercase()
+                        KeyBtn(display, Modifier.weight(1f)) { handleKeyAction(k) }
+                    }
+                    KeyBtn("⌫", Modifier.weight(1.4f), accent = true) { handleKeyAction("backspace") }
                 }
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    KeyBtn("SPACE", Modifier.weight(3f)) { onKey("key:space") }
-                    KeyBtn("ENTER", Modifier.weight(2f), accent = true) { onKey("key:enter") }
+                    KeyBtn("SPACE", Modifier.weight(3f)) { handleKeyAction("space") }
+                    KeyBtn("ENTER", Modifier.weight(2f), accent = true) { handleKeyAction("enter") }
                 }
 
                 // Arrow Key Pad
@@ -3014,15 +3131,15 @@ fun KeyboardScreen(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.Center
                 ) {
-                    KeyBtn("▲", Modifier.width(68.dp), accent = true) { onKey("key:up") }
+                    KeyBtn("▲", Modifier.width(68.dp), accent = true) { handleKeyAction("up") }
                 }
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterHorizontally)
                 ) {
-                    KeyBtn("◀", Modifier.width(68.dp), accent = true) { onKey("key:left") }
-                    KeyBtn("▼", Modifier.width(68.dp), accent = true) { onKey("key:down") }
-                    KeyBtn("▶", Modifier.width(68.dp), accent = true) { onKey("key:right") }
+                    KeyBtn("◀", Modifier.width(68.dp), accent = true) { handleKeyAction("left") }
+                    KeyBtn("▼", Modifier.width(68.dp), accent = true) { handleKeyAction("down") }
+                    KeyBtn("▶", Modifier.width(68.dp), accent = true) { handleKeyAction("right") }
                 }
             }
         }
@@ -3030,13 +3147,32 @@ fun KeyboardScreen(
 }
 
 @Composable
-fun KeyBtn(label: String, modifier: Modifier, accent: Boolean = false, onClick: () -> Unit) {
+fun KeyBtn(
+    label: String,
+    modifier: Modifier,
+    accent: Boolean = false,
+    active: Boolean = false,
+    onClick: () -> Unit
+) {
+    val containerColor = when {
+        active -> AppTheme.AccentCyan
+        accent -> AppTheme.KeyBackgroundAccent
+        else -> AppTheme.KeyBackground
+    }
+    val textColor = when {
+        active -> AppTheme.BackgroundDark
+        accent -> AppTheme.AccentCyan
+        else -> AppTheme.TextPrimary
+    }
+    val borderColor = when {
+        active -> AppTheme.AccentCyan
+        accent -> AppTheme.AccentCyan.copy(alpha = 0.5f)
+        else -> AppTheme.KeyBorder
+    }
     Button(
         onClick = onClick,
-        colors = ButtonDefaults.buttonColors(
-            containerColor = if (accent) AppTheme.KeyBackgroundAccent else AppTheme.KeyBackground
-        ),
-        border = BorderStroke(1.dp, if (accent) AppTheme.AccentCyan.copy(alpha = 0.5f) else AppTheme.KeyBorder),
+        colors = ButtonDefaults.buttonColors(containerColor = containerColor),
+        border = BorderStroke(1.dp, borderColor),
         shape = RoundedCornerShape(10.dp),
         contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp),
         modifier = modifier.height(46.dp)
@@ -3045,7 +3181,7 @@ fun KeyBtn(label: String, modifier: Modifier, accent: Boolean = false, onClick: 
             label,
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold,
-            color = if (accent) AppTheme.AccentCyan else AppTheme.TextPrimary
+            color = textColor
         )
     }
 }

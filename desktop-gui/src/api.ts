@@ -1,6 +1,6 @@
 import type {
   ServerStatus, SystemStats, TrustedDevice, PhoneFileItem, PairingRequest,
-  PhoneDeviceInfo
+  PhoneDeviceInfo, CameraRecordingStatus, CameraRecordingItem
 } from './types';
 
 const BASE_URL = 'http://127.0.0.1:5055';
@@ -196,5 +196,141 @@ export const api = {
   }> {
     const res = await fetch(`${BASE_URL}/system/update/status`);
     return res.json();
+  },
+
+  // Direct-to-PC Camera Recording API
+  async getCameraStatus(): Promise<CameraRecordingStatus> {
+    const res = await fetch(`${BASE_URL}/camera/status`);
+    if (!res.ok) throw new Error('Failed to fetch camera recording status');
+    return res.json();
+  },
+
+  async startCameraRecording(resolution = '1920x1080', fps = 30): Promise<{ status: string; message?: string; file_path?: string; filename?: string }> {
+    const res = await fetch(`${BASE_URL}/camera/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resolution, fps })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to start recording' }));
+      throw new Error(err.detail || 'Failed to start recording');
+    }
+    return res.json();
+  },
+
+  async stopCameraRecording(): Promise<{ status: string; message?: string; file_path?: string; file_size_bytes?: number; elapsed_seconds?: number }> {
+    const res = await fetch(`${BASE_URL}/camera/stop`, {
+      method: 'POST'
+    });
+    return res.json();
+  },
+
+  async setCameraDestination(destinationDir: string): Promise<{ status: string; destination_dir: string; disk_free_gb: number }> {
+    const res = await fetch(`${BASE_URL}/camera/destination`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ destination_dir: destinationDir })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to update destination folder' }));
+      throw new Error(err.detail || 'Failed to update destination folder');
+    }
+    return res.json();
+  },
+
+  async getCameraRecordings(maxItems = 50): Promise<CameraRecordingItem[]> {
+    try {
+      const res = await fetch(`${BASE_URL}/camera/recordings?max_items=${maxItems}`);
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.recordings || [];
+    } catch {
+      return [];
+    }
+  },
+
+  async openCameraFolder(): Promise<boolean> {
+    const res = await fetch(`${BASE_URL}/camera/open-folder`, { method: 'POST' });
+    return res.ok;
+  },
+
+  async openCameraFile(filePath: string): Promise<boolean> {
+    const res = await fetch(`${BASE_URL}/camera/open-file`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ file_path: filePath })
+    });
+    return res.ok;
+  },
+
+  getCameraPreviewUrl(): string {
+    return `${BASE_URL}/camera/preview?_t=${Date.now()}`;
+  },
+
+  getCameraMjpegStreamUrl(): string {
+    return `${BASE_URL}/camera/mjpeg-stream`;
+  },
+
+  async takeCameraSnapshot(): Promise<{ status: string; file_path?: string; filename?: string; size_mb?: number; message?: string }> {
+    const res = await fetch(`${BASE_URL}/camera/snapshot`, {
+      method: 'POST'
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to capture photo' }));
+      throw new Error(err.detail || 'Failed to capture photo');
+    }
+    return res.json();
+  },
+
+  async openPhoneCamera(phoneIp: string = ''): Promise<boolean> {
+    try {
+      const res = await fetch(`${BASE_URL}/phone/action?ip=${encodeURIComponent(phoneIp)}&action=open_camera`, {
+        method: 'POST'
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  },
+
+  async sendPhoneCameraAction(action: string, phoneIp: string = '', value: string = ''): Promise<boolean> {
+    try {
+      const res = await fetch(`${BASE_URL}/phone/action?ip=${encodeURIComponent(phoneIp)}&action=${encodeURIComponent(action)}&value=${encodeURIComponent(value)}`, {
+        method: 'POST'
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  },
+
+  async getSyncStatus(): Promise<{ status: string; destination_dir: string; disk_free_gb: number; files_count: number; total_mb: number; last_sync_time: number }> {
+    const res = await fetch(`${BASE_URL}/sync/status`);
+    if (!res.ok) throw new Error('Failed to fetch sync status');
+    return res.json();
+  },
+
+  async setSyncDestination(destination_dir: string): Promise<any> {
+    const res = await fetch(`${BASE_URL}/sync/destination`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ destination_dir })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to update folder' }));
+      throw new Error(err.detail || 'Failed to update folder');
+    }
+    return res.json();
+  },
+
+  async getSyncHistory(): Promise<any[]> {
+    try {
+      const res = await fetch(`${BASE_URL}/sync/history`);
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.history || [];
+    } catch {
+      return [];
+    }
   }
 };

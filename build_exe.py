@@ -132,6 +132,7 @@ def build(args):
                 f"--add-data={os.path.join(SERVER_DIR, 'logo.ico')};.",
                 f"--add-data={os.path.join(SERVER_DIR, 'logo.png')};.",
                 f"--add-data={os.path.join(SERVER_DIR, 'config.json')};.",
+                f"--add-binary={os.path.join(SERVER_DIR, 'bin', 'ffmpeg.exe')};bin",
                 f"--paths={SERVER_DIR}",
                 "--hidden-import=uvicorn.logging",
                 "--hidden-import=uvicorn.loops.auto",
@@ -145,20 +146,18 @@ def build(args):
                 "--collect-all=mss",
                 "--collect-all=sounddevice",
                 "--collect-all=websockets",
-                "--collect-all=pycaw",
-                "--collect-all=comtypes",
-                "--collect-all=numpy",
+                "--hidden-import=pycaw.pycaw",
+                "--hidden-import=comtypes.stream",
                 f"--distpath={ROOT_DIR}",
                 f"--workpath={os.path.join(ROOT_DIR, 'build', 'server')}",
             ]
 
             py_base = r"C:\Users\priya\AppData\Local\Programs\Python\Python312"
-            for dll in ["python312.dll", "vcruntime140.dll", "vcruntime140_1.dll"]:
+            for dll in ["vcruntime140.dll", "vcruntime140_1.dll"]:
                 dll_path = os.path.join(py_base, dll)
                 if os.path.exists(dll_path):
                     cmd_server.append(f"--add-binary={dll_path};.")
-            if args.clean:
-                cmd_server.append("--clean")
+            cmd_server.append("--clean")
             cmd_server.append(os.path.join(SERVER_DIR, "Remote_Server.py"))
 
             res1 = subprocess.run(cmd_server, cwd=SERVER_DIR)

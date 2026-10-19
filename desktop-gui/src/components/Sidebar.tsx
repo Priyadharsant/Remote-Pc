@@ -1,18 +1,17 @@
 import React from 'react';
 import type { LucideIcon } from 'lucide-react';
 import {
-  Server, Smartphone, Sliders, FolderSync, Shield, Settings as SettingsIcon,
-  Bell, Grid, Radio
+  Server, Smartphone, Sliders, FolderSync, FolderOpen, Shield, Settings as SettingsIcon,
+  Video
 } from 'lucide-react';
 
 export type TabKey =
   | 'server'
   | 'mobile-info'
+  | 'camera-record'
+  | 'folder-sync'
   | 'controls'
-  | 'screen'
   | 'files'
-  | 'apps'
-  | 'notifications'
   | 'security'
   | 'settings';
 
@@ -44,26 +43,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const sections: SidebarSection[] = [
     {
-      title: 'PC & PAIRING',
+      title: 'COMPUTER & STATUS',
       items: [
-        { key: 'server', label: 'Server & Status', icon: Server, badge: pendingPairingsCount > 0 ? `${pendingPairingsCount}` : null },
+        { key: 'server', label: 'Status & Pairing', icon: Server, badge: pendingPairingsCount > 0 ? `${pendingPairingsCount}` : null },
       ]
     },
     {
-      title: 'PHONE REMOTE CONTROL',
+      title: 'PHONE CONTROL',
       items: [
-        { key: 'mobile-info', label: 'Device Info', icon: Smartphone, highlight: hasPhoneConnected },
-        { key: 'screen', label: 'Screen Mirror', icon: Radio },
-        { key: 'controls', label: 'Phone Control Deck', icon: Sliders },
-        { key: 'files', label: 'File Manager', icon: FolderSync },
-        { key: 'apps', label: 'Apps Management', icon: Grid },
-        { key: 'notifications', label: 'Notifications', icon: Bell },
+        { key: 'mobile-info', label: 'Phone Status', icon: Smartphone, highlight: hasPhoneConnected },
+        { key: 'camera-record', label: 'Live Camera', icon: Video },
+        { key: 'folder-sync', label: 'Folder Sync', icon: FolderSync },
+        { key: 'controls', label: 'Quick Controls', icon: Sliders },
+        { key: 'files', label: 'Files & Media', icon: FolderOpen },
       ]
     },
     {
-      title: 'SYSTEM & SECURITY',
+      title: 'SYSTEM & SETTINGS',
       items: [
-        { key: 'security', label: 'Security & Paired', icon: Shield },
+        { key: 'security', label: 'Security & Devices', icon: Shield },
         { key: 'settings', label: 'Settings', icon: SettingsIcon },
       ]
     }
@@ -111,9 +109,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Bottom Info badge */}
       <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800/80 text-[11px] text-slate-400 mt-3">
-        <div className="font-semibold text-slate-300">Remote Protocol v3.0</div>
-        <div className="text-[10px] text-slate-500 mt-0.5">TLS • FastApi • Zero-Lag UDP</div>
+        <div className="font-semibold text-slate-300">Remote PC v3.2</div>
+        <div className="text-[10px] text-slate-500 mt-0.5">Secure Local Connection</div>
       </div>
     </aside>
   );
 };
+

@@ -102,6 +102,36 @@ export interface UpdateProgress {
   streams?: number;
 }
 
+export interface CameraRecordingStatus {
+  status: 'Disconnected' | 'Ready' | 'Recording' | 'Finalizing' | 'Saved' | 'Error';
+  is_recording: boolean;
+  is_connected: boolean;
+  client_ip: string | null;
+  stream_port: number;
+  destination_dir: string;
+  disk_free_gb: number;
+  active_resolution: string;
+  active_fps: number;
+  bitrate_kbps: number;
+  audio_status: string;
+  elapsed_seconds: number;
+  file_size_bytes: number;
+  current_file: string | null;
+  current_file_path: string | null;
+  has_preview?: boolean;
+  phone_camera_active?: boolean;
+  error_message: string | null;
+}
+
+export interface CameraRecordingItem {
+  name: string;
+  path: string;
+  size_bytes: number;
+  size_mb: number;
+  created_at: string;
+  created_timestamp: number;
+}
+
 declare global {
   interface Window {
     electronAPI?: {
@@ -111,6 +141,7 @@ declare global {
       hideToTray: () => void;
       isMaximized: () => Promise<boolean>;
       openExternalFolder: (folderPath?: string) => Promise<boolean>;
+      selectDirectory?: (defaultPath?: string) => Promise<string | null>;
       openFileItem: (filePath: string) => Promise<boolean>;
       openExternalUrl: (url: string) => Promise<boolean>;
       openExternal: (url: string) => Promise<boolean>;

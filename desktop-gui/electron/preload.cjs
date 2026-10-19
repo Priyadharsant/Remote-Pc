@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Shell & Files
   openExternalFolder: (folderPath) => ipcRenderer.invoke('shell:open-folder', folderPath),
+  selectDirectory: (defaultPath) => ipcRenderer.invoke('dialog:open-directory', defaultPath),
   openFileItem: (filePath) => ipcRenderer.invoke('shell:open-file', filePath),
   openExternalUrl: (url) => ipcRenderer.invoke('shell:open-url', url),
   openExternal: (url) => ipcRenderer.invoke('shell:open-url', url),

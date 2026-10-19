@@ -66,8 +66,9 @@ class RemoteBackgroundService : Service() {
         createNotificationChannel()
         acquireLocks()
         VideoStreamServer.startServer(this)
+        FolderSyncManager.start(this)
         isRunning = true
-        Log.d(TAG, "RemoteBackgroundService created with VideoStreamServer active")
+        Log.d(TAG, "RemoteBackgroundService created with VideoStreamServer and FolderSyncManager active")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -82,6 +83,7 @@ class RemoteBackgroundService : Service() {
 
         startForegroundWithNotification()
         startHeartbeat()
+        FolderSyncManager.start(this, targetIp, SecureStorage.getPassword(this))
 
         return START_STICKY
     }
@@ -432,6 +434,7 @@ class RemoteBackgroundService : Service() {
         isRunning = false
         wasConnected = false
         heartbeatJob?.cancel()
+        FolderSyncManager.stop()
         serviceScope.cancel()
         releaseLocks()
         stopForeground(STOP_FOREGROUND_REMOVE)

@@ -37,6 +37,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.Send
@@ -156,8 +157,8 @@ fun RemoteDesktopScreen(
     var selectedQuality by remember { mutableIntStateOf(60) }
     var selectedScale by remember { mutableFloatStateOf(0.9f) }
 
-    // Touch interaction mode
-    var touchStyle by remember { mutableStateOf(TouchInteractionStyle.MOBILE_SCROLL) }
+    // Touch interaction mode (Default: Direct Touch / Drag Select for sliding sliders and desktop controls)
+    var touchStyle by remember { mutableStateOf(TouchInteractionStyle.DRAG_SELECT) }
 
     // Live Metrics
     var fpsCounter by remember { mutableIntStateOf(0) }
@@ -170,6 +171,18 @@ fun RemoteDesktopScreen(
     var showKeyboardSheet by remember { mutableStateOf(false) }
     var isAudioPlaying by remember { mutableStateOf(false) }
     var typedText by remember { mutableStateOf("") }
+
+    // Real PC Keyboard Modifier States (Sticky/Latchable)
+    var isCtrlActive by remember { mutableStateOf(false) }
+    var isAltActive by remember { mutableStateOf(false) }
+    var isShiftActive by remember { mutableStateOf(false) }
+    var isWinActive by remember { mutableStateOf(false) }
+
+    // Header & Sidebar Visibility Policies
+    // Header hides permanently after 5s; Sidebar auto-closes after 5s and slides open on tap
+    var isHeaderVisible by remember { mutableStateOf(true) }
+    var isSidebarVisible by remember { mutableStateOf(true) }
+    var lastSidebarInteractionTime by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
     // Canvas & Destination Fit Geometry
     var canvasSize by remember { mutableStateOf(IntSize.Zero) }
@@ -264,7 +277,8 @@ fun RemoteDesktopScreen(
                         channelMask,
                         AudioFormat.ENCODING_PCM_16BIT
                     )
-                    val bufferSize = minBufSize.coerceAtLeast(8192)
+                    // ~250ms buffer capacity (approx 48KB) to absorb network jitter without underruns
+                    val bufferCapacity = maxOf(minBufSize * 4, 48000)
 
                     track = AudioTrack.Builder()
                         .setAudioAttributes(
@@ -280,19 +294,67 @@ fun RemoteDesktopScreen(
                                 .setChannelMask(channelMask)
                                 .build()
                         )
-                        .setBufferSizeInBytes(bufferSize * 2)
+                        .setBufferSizeInBytes(bufferCapacity)
                         .setTransferMode(AudioTrack.MODE_STREAM)
                         .build()
 
                     audioTrackRef = track
+
+                    val bufferedStream = java.io.BufferedInputStream(inputStream, 16384)
+
+                    // Frame size in bytes (16-bit stereo PCM = 4 bytes per frame)
+                    val frameSize = if (channelMask == AudioFormat.CHANNEL_OUT_MONO) 2 else 4
+                    var carryoverLen = 0
+                    val carryoverBuf = ByteArray(frameSize)
+
+                    // Jitter Pre-buffering: accumulate ~16KB (~85ms of audio) before starting playback
+                    // to guarantee the AudioTrack never starves from Wi-Fi jitter!
+                    val prebufferTarget = 16384
+                    var prebufferedBytes = 0
+                    val prebuffer = ByteArray(prebufferTarget)
+                    while (isActive && prebufferedBytes < prebufferTarget) {
+                        val r = bufferedStream.read(prebuffer, prebufferedBytes, prebufferTarget - prebufferedBytes)
+                        if (r == -1) break
+                        prebufferedBytes += r
+                    }
+
+                    if (prebufferedBytes > 0) {
+                        val alignedPrebuffer = (prebufferedBytes / frameSize) * frameSize
+                        val preRemainder = prebufferedBytes - alignedPrebuffer
+                        if (alignedPrebuffer > 0) {
+                            track.write(prebuffer, 0, alignedPrebuffer)
+                        }
+                        if (preRemainder > 0) {
+                            System.arraycopy(prebuffer, alignedPrebuffer, carryoverBuf, 0, preRemainder)
+                            carryoverLen = preRemainder
+                        }
+                    }
                     track.play()
 
-                    val buffer = ByteArray(4096)
+                    val readBuf = ByteArray(4096)
+                    val writeBuf = ByteArray(4096 + frameSize)
                     while (isActive) {
-                        val bytesRead = inputStream.read(buffer, 0, buffer.size)
+                        val bytesRead = bufferedStream.read(readBuf, 0, readBuf.size)
                         if (bytesRead == -1) break
                         if (bytesRead > 0) {
-                            track.write(buffer, 0, bytesRead)
+                            if (carryoverLen > 0) {
+                                System.arraycopy(carryoverBuf, 0, writeBuf, 0, carryoverLen)
+                            }
+                            System.arraycopy(readBuf, 0, writeBuf, carryoverLen, bytesRead)
+                            val totalBytes = carryoverLen + bytesRead
+                            val alignedBytes = (totalBytes / frameSize) * frameSize
+                            val remainder = totalBytes - alignedBytes
+
+                            if (alignedBytes > 0) {
+                                track.write(writeBuf, 0, alignedBytes)
+                            }
+
+                            if (remainder > 0) {
+                                System.arraycopy(writeBuf, alignedBytes, carryoverBuf, 0, remainder)
+                                carryoverLen = remainder
+                            } else {
+                                carryoverLen = 0
+                            }
                         }
                     }
                 } catch (e: Exception) {
@@ -327,6 +389,111 @@ fun RemoteDesktopScreen(
             } catch (e: Exception) {
                 Log.e("RemoteDesktop", "Failed to send action: ${e.message}")
             }
+        }
+    }
+
+    // Real PC Keyboard: executes key action combining any currently held modifiers (Shift, Ctrl, Alt, Win)
+    val sendKeyWithModifiers: (String) -> Unit = { key ->
+        triggerHaptic()
+        val activeMods = mutableListOf<String>()
+        if (isCtrlActive) activeMods.add("ctrl")
+        if (isAltActive) activeMods.add("alt")
+        if (isShiftActive) activeMods.add("shift")
+        if (isWinActive) activeMods.add("win")
+
+        if (activeMods.isNotEmpty()) {
+            val combo = JSONArray().apply {
+                activeMods.forEach { put(it) }
+                put(key)
+            }
+            sendAction(JSONObject().apply {
+                put("type", "hotkey")
+                put("keys", combo)
+            })
+            // Standard PC keyboard behavior: auto-unlatch Shift after single key execution
+            if (isShiftActive) isShiftActive = false
+        } else {
+            sendAction(JSONObject().apply {
+                put("type", "key_press")
+                put("key", key)
+            })
+        }
+    }
+
+    // Real PC Keyboard: Character typing with dynamic Shift casing & modifier combo support
+    val sendCharInput: (Char) -> Unit = { ch ->
+        triggerHaptic()
+        val activeMods = mutableListOf<String>()
+        if (isCtrlActive) activeMods.add("ctrl")
+        if (isAltActive) activeMods.add("alt")
+        if (isWinActive) activeMods.add("win")
+
+        if (activeMods.isNotEmpty()) {
+            val combo = JSONArray().apply {
+                activeMods.forEach { put(it) }
+                if (isShiftActive) put("shift")
+                put(ch.lowercaseChar().toString())
+            }
+            sendAction(JSONObject().apply {
+                put("type", "hotkey")
+                put("keys", combo)
+            })
+            if (isShiftActive) isShiftActive = false
+        } else {
+            val finalChar = if (isShiftActive) {
+                when (ch) {
+                    '1' -> '!'
+                    '2' -> '@'
+                    '3' -> '#'
+                    '4' -> '$'
+                    '5' -> '%'
+                    '6' -> '^'
+                    '7' -> '&'
+                    '8' -> '*'
+                    '9' -> '('
+                    '0' -> ')'
+                    '-' -> '_'
+                    '=' -> '+'
+                    ';' -> ':'
+                    '\'' -> '"'
+                    ',' -> '<'
+                    '.' -> '>'
+                    '/' -> '?'
+                    '[' -> '{'
+                    ']' -> '}'
+                    '\\' -> '|'
+                    '`' -> '~'
+                    else -> ch.uppercaseChar()
+                }
+            } else {
+                ch
+            }
+            sendAction(JSONObject().apply {
+                put("type", "type_text")
+                put("text", finalChar.toString())
+            })
+            if (isShiftActive) isShiftActive = false
+        }
+    }
+
+    // Auto-fetch fresh window list whenever window picker sheet opens
+    LaunchedEffect(showWindowPickerSheet) {
+        if (showWindowPickerSheet) {
+            sendAction(JSONObject().apply { put("type", "get_windows") })
+        }
+    }
+
+    // Hide top header permanently after 5 seconds of entering Remote Desktop
+    LaunchedEffect(Unit) {
+        delay(5000L)
+        isHeaderVisible = false
+    }
+
+    // Auto-hide/close floating sidebar after 5 seconds of inactivity
+    LaunchedEffect(isSidebarVisible, lastSidebarInteractionTime, showFullDrawer, showKeyboardSheet, showWindowPickerSheet) {
+        if (isSidebarVisible && !showFullDrawer && !showKeyboardSheet && !showWindowPickerSheet) {
+            delay(5000L)
+            isSidebarVisible = false
         }
     }
 
@@ -538,26 +705,35 @@ fun RemoteDesktopScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .pointerInput(selectedMonitorId, touchStyle) {
+                    .pointerInput(selectedMonitorId, touchStyle, canvasSize, dstWidth, dstHeight) {
                         awaitEachGesture {
                             val down = awaitFirstDown(requireUnconsumed = false)
                             val startPos = down.position
 
-                            // Verify touch occurred inside active desktop canvas
-                            val inBounds = startPos.x in dstLeft..(dstLeft + dstWidth) &&
-                                    startPos.y in dstTop..(dstTop + dstHeight)
-                            if (!inBounds || dstWidth <= 0f || dstHeight <= 0f) {
-                                return@awaitEachGesture
-                            }
+                            val canvasW = if (dstWidth > 0f) dstWidth else canvasSize.width.toFloat().coerceAtLeast(1f)
+                            val canvasH = if (dstHeight > 0f) dstHeight else canvasSize.height.toFloat().coerceAtLeast(1f)
+                            val left = if (dstWidth > 0f) dstLeft else 0f
+                            val top = if (dstHeight > 0f) dstTop else 0f
+
+                            val normX = ((startPos.x - left) / canvasW).coerceIn(0f, 1f)
+                            val normY = ((startPos.y - top) / canvasH).coerceIn(0f, 1f)
+                            var curNormX = normX
+                            var curNormY = normY
+
+                            // Immediately move cursor to touch point on PC
+                            sendAction(JSONObject().apply {
+                                put("type", "mouse_move")
+                                put("x", normX.toDouble())
+                                put("y", normY.toDouble())
+                                put("is_normalized", true)
+                                put("monitor", selectedMonitorId)
+                            })
 
                             var isDragging = false
                             var isLongPress = false
                             var hasScrolled = false
                             val downTime = System.currentTimeMillis()
                             var lastPos = startPos
-
-                            val normX = ((startPos.x - dstLeft) / dstWidth).coerceIn(0f, 1f)
-                            val normY = ((startPos.y - dstTop) / dstHeight).coerceIn(0f, 1f)
 
                             while (true) {
                                 val event = awaitPointerEvent()
@@ -587,21 +763,21 @@ fun RemoteDesktopScreen(
                                             put("monitor", selectedMonitorId)
                                         })
                                         currentChange.consume()
-                                    } else if (!isLongPress && distFromStart > 12f) {
+                                    } else if (!isLongPress && distFromStart > 10f) {
                                         if (touchStyle == TouchInteractionStyle.MOBILE_SCROLL) {
-                                            // Single finger mobile-style scroll!
+                                            // Single finger mobile-style scroll! Smooth calibrated sensitivity
                                             hasScrolled = true
                                             if (abs(deltaY) > 0.5f || abs(deltaX) > 0.5f) {
                                                 sendAction(JSONObject().apply {
                                                     put("type", "mouse_scroll")
                                                     // Swipe up scrolls page down (natural mobile scrolling)
-                                                    put("dy", (deltaY * 2.2).toDouble())
-                                                    put("dx", (-deltaX * 2.2).toDouble())
+                                                    put("dy", (deltaY * 0.20).toDouble())
+                                                    put("dx", (-deltaX * 0.20).toDouble())
                                                 })
                                                 currentChange.consume()
                                             }
                                         } else {
-                                            // Drag & select mode
+                                            // Direct Touch / Drag & Select mode: moves sliders, drags windows, selects text
                                             if (!isDragging) {
                                                 isDragging = true
                                                 sendAction(JSONObject().apply {
@@ -613,8 +789,8 @@ fun RemoteDesktopScreen(
                                                     put("monitor", selectedMonitorId)
                                                 })
                                             }
-                                            val curNormX = ((currentPos.x - dstLeft) / dstWidth).coerceIn(0f, 1f)
-                                            val curNormY = ((currentPos.y - dstTop) / dstHeight).coerceIn(0f, 1f)
+                                            curNormX = ((currentPos.x - left) / canvasW).coerceIn(0f, 1f)
+                                            curNormY = ((currentPos.y - top) / canvasH).coerceIn(0f, 1f)
                                             sendAction(JSONObject().apply {
                                                 put("type", "mouse_move")
                                                 put("x", curNormX.toDouble())
@@ -626,16 +802,16 @@ fun RemoteDesktopScreen(
                                         }
                                     }
                                 } else if (activePointers.size == 2) {
-                                    // Two-finger pinch to zoom or two-finger scroll
+                                    // Two-finger smooth precision scrolling
                                     val p1 = activePointers[0]
                                     val p2 = activePointers[1]
                                     val dragY = (p1.position.y - p1.previousPosition.y + p2.position.y - p2.previousPosition.y) / 2f
                                     val dragX = (p1.position.x - p1.previousPosition.x + p2.position.x - p2.previousPosition.x) / 2f
-                                    if (abs(dragY) > 2f || abs(dragX) > 2f) {
+                                    if (abs(dragY) > 1.5f || abs(dragX) > 1.5f) {
                                         sendAction(JSONObject().apply {
                                             put("type", "mouse_scroll")
-                                            put("dy", (dragY * 1.8).toDouble())
-                                            put("dx", (-dragX * 1.8).toDouble())
+                                            put("dy", (dragY * 0.20).toDouble())
+                                            put("dx", (-dragX * 0.20).toDouble())
                                         })
                                         p1.consume()
                                         p2.consume()
@@ -648,6 +824,9 @@ fun RemoteDesktopScreen(
                                 sendAction(JSONObject().apply {
                                     put("type", "mouse_up")
                                     put("button", "left")
+                                    put("x", curNormX.toDouble())
+                                    put("y", curNormY.toDouble())
+                                    put("is_normalized", true)
                                     put("monitor", selectedMonitorId)
                                 })
                             } else if (!isLongPress && !hasScrolled && System.currentTimeMillis() - downTime < 400) {
@@ -745,18 +924,28 @@ fun RemoteDesktopScreen(
         }
 
         // ---------------------------------------------------------------------
-        // Side Floating Navigation Rail (Easy 1-Tap Access on Right Edge)
+        // Side Floating Navigation Rail (Auto-closes after 5s, slides open on pull tab tap)
         // ---------------------------------------------------------------------
-        if (showQuickNav && !showFullDrawer) {
+        AnimatedVisibility(
+            visible = isSidebarVisible && showQuickNav && !showFullDrawer,
+            enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
+            exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut(),
+            modifier = Modifier.align(Alignment.CenterEnd)
+        ) {
             Box(
                 modifier = Modifier
-                    .align(Alignment.CenterEnd)
                     .padding(end = 6.dp)
                     .heightIn(max = 350.dp)
                     .shadow(16.dp, RoundedCornerShape(20.dp))
                     .clip(RoundedCornerShape(20.dp))
                     .background(Color(0xD90F172A))
                     .border(1.dp, Color(0xFF334155), RoundedCornerShape(20.dp))
+                    .pointerInput(Unit) {
+                        awaitEachGesture {
+                            awaitFirstDown(requireUnconsumed = false)
+                            lastSidebarInteractionTime = System.currentTimeMillis()
+                        }
+                    }
                     .padding(vertical = 6.dp, horizontal = 4.dp)
             ) {
                 Column(
@@ -969,49 +1158,120 @@ fun RemoteDesktopScreen(
             }
         }
 
-        // Floating Top Indicator when an isolated app/window is being controlled
-        if (targetMode == "window" && !showFullDrawer) {
+        // ---------------------------------------------------------------------
+        // Sleek Edge Pull Tab Handle (Visible when navigation rail is closed)
+        // ---------------------------------------------------------------------
+        AnimatedVisibility(
+            visible = !isSidebarVisible && showQuickNav && !showFullDrawer,
+            enter = slideInHorizontally(initialOffsetX = { it }) + fadeIn(),
+            exit = slideOutHorizontally(targetOffsetX = { it }) + fadeOut(),
+            modifier = Modifier.align(Alignment.CenterEnd)
+        ) {
             Box(
                 modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .padding(top = 10.dp)
-                    .clip(RoundedCornerShape(20.dp))
+                    .padding(end = 0.dp)
+                    .clip(RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
                     .background(Color(0xD90F172A))
-                    .border(1.dp, Color(0xFF10B981), RoundedCornerShape(20.dp))
+                    .border(1.dp, Color(0xFF38BDF8).copy(alpha = 0.6f), RoundedCornerShape(topStart = 16.dp, bottomStart = 16.dp))
                     .clickable {
                         triggerHaptic()
-                        targetMode = "desktop"
-                        targetHwnd = 0L
-                        targetWindowTitle = "Full Desktop"
-                        sendAction(JSONObject().apply {
-                            put("type", "set_target")
-                            put("mode", "desktop")
-                            put("monitor", selectedMonitorId)
-                        })
+                        isSidebarVisible = true
+                        lastSidebarInteractionTime = System.currentTimeMillis()
                     }
-                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                    .padding(vertical = 14.dp, horizontal = 5.dp),
+                contentAlignment = Alignment.Center
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                Icon(
+                    Icons.Rounded.ChevronLeft,
+                    contentDescription = "Open Navigation Controls",
+                    tint = Color(0xFF38BDF8),
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+        }
+
+        // ---------------------------------------------------------------------
+        // Floating Top Header / Indicator (Hides permanently after 5s)
+        // ---------------------------------------------------------------------
+        AnimatedVisibility(
+            visible = isHeaderVisible && !showFullDrawer,
+            enter = slideInVertically(initialOffsetY = { -it }) + fadeIn(),
+            exit = slideOutVertically(targetOffsetY = { -it }) + fadeOut(),
+            modifier = Modifier.align(Alignment.TopCenter)
+        ) {
+            if (targetMode == "window") {
+                Box(
+                    modifier = Modifier
+                        .padding(top = 10.dp)
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(Color(0xD90F172A))
+                        .border(1.dp, Color(0xFF10B981), RoundedCornerShape(20.dp))
+                        .clickable {
+                            triggerHaptic()
+                            targetMode = "desktop"
+                            targetHwnd = 0L
+                            targetWindowTitle = "Full Desktop"
+                            sendAction(JSONObject().apply {
+                                put("type", "set_target")
+                                put("mode", "desktop")
+                                put("monitor", selectedMonitorId)
+                            })
+                        }
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(7.dp)
-                            .background(Color(0xFF10B981), CircleShape)
-                    )
-                    Text(
-                        text = "App: ${targetWindowTitle.take(24)}${if (targetWindowTitle.length > 24) "…" else ""}",
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                    Icon(
-                        Icons.Rounded.Close,
-                        contentDescription = "Return to Full Desktop",
-                        tint = Color(0xFF94A3B8),
-                        modifier = Modifier.size(13.dp)
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(7.dp)
+                                .background(Color(0xFF10B981), CircleShape)
+                        )
+                        Text(
+                            text = "App: ${targetWindowTitle.take(24)}${if (targetWindowTitle.length > 24) "…" else ""}",
+                            color = Color.White,
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Icon(
+                            Icons.Rounded.Close,
+                            contentDescription = "Return to Full Desktop",
+                            tint = Color(0xFF94A3B8),
+                            modifier = Modifier.size(13.dp)
+                        )
+                    }
+                }
+            } else {
+                Box(
+                    modifier = Modifier
+                        .padding(top = 10.dp)
+                        .clip(RoundedCornerShape(20.dp))
+                        .background(Color(0xB30F172A))
+                        .border(1.dp, Color(0xFF334155), RoundedCornerShape(20.dp))
+                        .clickable {
+                            triggerHaptic()
+                            sendAction(JSONObject().apply { put("type", "get_windows") })
+                            showWindowPickerSheet = true
+                        }
+                        .padding(horizontal = 12.dp, vertical = 5.dp)
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(7.dp)
+                                .background(Color(0xFF38BDF8), CircleShape)
+                        )
+                        Text(
+                            text = "Display $selectedMonitorId • $frameResolution • ${currentFps} FPS",
+                            color = Color(0xFFCBD5E1),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                 }
             }
         }
@@ -1326,95 +1586,327 @@ fun RemoteDesktopScreen(
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
-                        .padding(bottom = 24.dp),
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                        .padding(horizontal = 12.dp, vertical = 4.dp)
+                        .padding(bottom = 24.dp)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Text(
-                        text = "Windows Virtual Keyboard",
-                        color = Color.White,
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-
-                    // Windows Special Keys Row 1
+                    // Header & Active Modifiers Bar
                     Row(
                         modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Column {
+                            Text(
+                                text = "Windows PC Keyboard",
+                                color = Color.White,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            val anyModActive = isCtrlActive || isAltActive || isShiftActive || isWinActive
+                            if (anyModActive) {
+                                val activeNames = buildList {
+                                    if (isCtrlActive) add("CTRL")
+                                    if (isAltActive) add("ALT")
+                                    if (isShiftActive) add("SHIFT")
+                                    if (isWinActive) add("WIN")
+                                }.joinToString(" + ")
+                                Text(
+                                    text = "Active combo: $activeNames + [Key]",
+                                    color = Color(0xFF38BDF8),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            } else {
+                                Text(
+                                    text = "Tap Shift, Alt, Ctrl to latch combos (e.g. Alt+Tab, Shift+A)",
+                                    color = Color(0xFF94A3B8),
+                                    fontSize = 10.sp
+                                )
+                            }
+                        }
+
+                        if (isCtrlActive || isAltActive || isShiftActive || isWinActive) {
+                            TextButton(
+                                onClick = {
+                                    triggerHaptic()
+                                    isCtrlActive = false
+                                    isAltActive = false
+                                    isShiftActive = false
+                                    isWinActive = false
+                                },
+                                contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
+                            ) {
+                                Text("Reset Modifiers", color = Color(0xFFF87171), fontSize = 11.sp)
+                            }
+                        }
+                    }
+
+                    // Direct Interactive Text Box
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        OutlinedTextField(
+                            value = typedText,
+                            onValueChange = { typedText = it },
+                            placeholder = { Text("Type text to PC...", fontSize = 11.sp, color = Color(0xFF64748B)) },
+                            modifier = Modifier.weight(1f),
+                            singleLine = true,
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedBorderColor = Color(0xFF6366F1),
+                                unfocusedBorderColor = Color(0xFF334155),
+                                focusedTextColor = Color.White,
+                                unfocusedTextColor = Color.White
+                            )
+                        )
+                        IconButton(
+                            onClick = {
+                                if (typedText.isNotEmpty()) {
+                                    triggerHaptic()
+                                    sendAction(JSONObject().apply {
+                                        put("type", "type_text")
+                                        put("text", typedText)
+                                    })
+                                    typedText = ""
+                                }
+                            },
+                            modifier = Modifier
+                                .size(48.dp)
+                                .background(Color(0xFF6366F1), RoundedCornerShape(10.dp))
+                        ) {
+                            Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = "Send Text", tint = Color.White)
+                        }
+                    }
+
+                    // Quick Shortcuts Horizontal Scroll Row
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .horizontalScroll(rememberScrollState()),
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        ShortcutPill(label = "⇥ Alt+Tab", modifier = Modifier.width(90.dp)) {
+                            triggerHaptic()
+                            sendAction(JSONObject().apply {
+                                put("type", "hotkey")
+                                put("keys", JSONArray().apply { put("alt"); put("tab") })
+                            })
+                        }
+                        ShortcutPill(label = "⊞ Win+D", modifier = Modifier.width(85.dp)) {
+                            triggerHaptic()
+                            sendAction(JSONObject().apply {
+                                put("type", "hotkey")
+                                put("keys", JSONArray().apply { put("win"); put("d") })
+                            })
+                        }
+                        ShortcutPill(label = "Ctrl+C", modifier = Modifier.width(75.dp)) {
+                            triggerHaptic()
+                            sendAction(JSONObject().apply {
+                                put("type", "hotkey")
+                                put("keys", JSONArray().apply { put("ctrl"); put("c") })
+                            })
+                        }
+                        ShortcutPill(label = "Ctrl+V", modifier = Modifier.width(75.dp)) {
+                            triggerHaptic()
+                            sendAction(JSONObject().apply {
+                                put("type", "hotkey")
+                                put("keys", JSONArray().apply { put("ctrl"); put("v") })
+                            })
+                        }
+                        ShortcutPill(label = "Ctrl+Z", modifier = Modifier.width(75.dp)) {
+                            triggerHaptic()
+                            sendAction(JSONObject().apply {
+                                put("type", "hotkey")
+                                put("keys", JSONArray().apply { put("ctrl"); put("z") })
+                            })
+                        }
+                        ShortcutPill(label = "Ctrl+A", modifier = Modifier.width(75.dp)) {
+                            triggerHaptic()
+                            sendAction(JSONObject().apply {
+                                put("type", "hotkey")
+                                put("keys", JSONArray().apply { put("ctrl"); put("a") })
+                            })
+                        }
+                        ShortcutPill(label = "TaskMgr", modifier = Modifier.width(85.dp)) {
+                            triggerHaptic()
+                            sendAction(JSONObject().apply {
+                                put("type", "hotkey")
+                                put("keys", JSONArray().apply { put("ctrl"); put("shift"); put("esc") })
+                            })
+                        }
+                        ShortcutPill(label = "Alt+F4", modifier = Modifier.width(75.dp)) {
+                            triggerHaptic()
+                            sendAction(JSONObject().apply {
+                                put("type", "hotkey")
+                                put("keys", JSONArray().apply { put("alt"); put("f4") })
+                            })
+                        }
+                    }
+
+                    // Windows PC Modifier Keys Row (Latchable)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         KeyPill(label = "Esc", modifier = Modifier.weight(1f)) {
-                            triggerHaptic()
-                            sendAction(JSONObject().apply { put("type", "key_press"); put("key", "esc") })
+                            sendKeyWithModifiers("esc")
                         }
                         KeyPill(label = "Tab", modifier = Modifier.weight(1f)) {
-                            triggerHaptic()
-                            sendAction(JSONObject().apply { put("type", "key_press"); put("key", "tab") })
+                            sendKeyWithModifiers("tab")
                         }
-                        KeyPill(label = "Ctrl", modifier = Modifier.weight(1f)) {
+                        KeyPill(
+                            label = if (isCtrlActive) "Ctrl ●" else "Ctrl",
+                            isActive = isCtrlActive,
+                            activeColor = Color(0xFF6366F1),
+                            modifier = Modifier.weight(1.2f)
+                        ) {
                             triggerHaptic()
-                            sendAction(JSONObject().apply { put("type", "key_press"); put("key", "ctrl") })
+                            isCtrlActive = !isCtrlActive
                         }
-                        KeyPill(label = "Alt", modifier = Modifier.weight(1f)) {
+                        KeyPill(
+                            label = if (isAltActive) "Alt ●" else "Alt",
+                            isActive = isAltActive,
+                            activeColor = Color(0xFF0284C7),
+                            modifier = Modifier.weight(1.2f)
+                        ) {
                             triggerHaptic()
-                            sendAction(JSONObject().apply { put("type", "key_press"); put("key", "alt") })
+                            isAltActive = !isAltActive
                         }
-                        KeyPill(label = "Shift", modifier = Modifier.weight(1f)) {
+                        KeyPill(
+                            label = if (isShiftActive) "Shift ⇧" else "Shift",
+                            isActive = isShiftActive,
+                            activeColor = Color(0xFF10B981),
+                            modifier = Modifier.weight(1.3f)
+                        ) {
                             triggerHaptic()
-                            sendAction(JSONObject().apply { put("type", "key_press"); put("key", "shift") })
+                            isShiftActive = !isShiftActive
                         }
-                        KeyPill(label = "⊞ Win", modifier = Modifier.weight(1f)) {
+                        KeyPill(
+                            label = if (isWinActive) "⊞ Win ●" else "⊞ Win",
+                            isActive = isWinActive,
+                            activeColor = Color(0xFFF59E0B),
+                            modifier = Modifier.weight(1.3f)
+                        ) {
                             triggerHaptic()
-                            sendAction(JSONObject().apply { put("type", "key_press"); put("key", "win") })
-                        }
-                    }
-
-                    // Windows Navigation Row 2
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        KeyPill(label = "Backspace", modifier = Modifier.weight(1.5f)) {
-                            triggerHaptic()
-                            sendAction(JSONObject().apply { put("type", "key_press"); put("key", "backspace") })
-                        }
-                        KeyPill(label = "Delete", modifier = Modifier.weight(1.2f)) {
-                            triggerHaptic()
-                            sendAction(JSONObject().apply { put("type", "key_press"); put("key", "delete") })
-                        }
-                        KeyPill(label = "Enter", modifier = Modifier.weight(1.5f)) {
-                            triggerHaptic()
-                            sendAction(JSONObject().apply { put("type", "key_press"); put("key", "enter") })
-                        }
-                        KeyPill(label = "Space", modifier = Modifier.weight(2f)) {
-                            triggerHaptic()
-                            sendAction(JSONObject().apply { put("type", "key_press"); put("key", "space") })
+                            isWinActive = !isWinActive
                         }
                     }
 
-                    // Windows Arrow Keys
+                    // PC Numbers & Symbols Row
+                    val numRow = listOf(
+                        Pair("1", "!"), Pair("2", "@"), Pair("3", "#"), Pair("4", "$"),
+                        Pair("5", "%"), Pair("6", "^"), Pair("7", "&"), Pair("8", "*"),
+                        Pair("9", "("), Pair("0", ")"), Pair("-", "_"), Pair("=", "+")
+                    )
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.Center
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)
                     ) {
-                        KeyPill(label = "◀", modifier = Modifier.width(60.dp)) {
-                            triggerHaptic()
-                            sendAction(JSONObject().apply { put("type", "key_press"); put("key", "left") })
-                        }
-                        Spacer(Modifier.width(6.dp))
-                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                            KeyPill(label = "▲", modifier = Modifier.width(60.dp)) {
-                                triggerHaptic()
-                                sendAction(JSONObject().apply { put("type", "key_press"); put("key", "up") })
-                            }
-                            KeyPill(label = "▼", modifier = Modifier.width(60.dp)) {
-                                triggerHaptic()
-                                sendAction(JSONObject().apply { put("type", "key_press"); put("key", "down") })
+                        numRow.forEach { (norm, shifted) ->
+                            val display = if (isShiftActive) shifted else norm
+                            val sub = if (isShiftActive) norm else shifted
+                            CharKeyPill(
+                                primary = display,
+                                secondary = sub,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                sendCharInput(display[0])
                             }
                         }
-                        Spacer(Modifier.width(6.dp))
-                        KeyPill(label = "▶", modifier = Modifier.width(60.dp)) {
+                        KeyPill(label = "⌫", modifier = Modifier.weight(1.2f)) {
+                            sendKeyWithModifiers("backspace")
+                        }
+                    }
+
+                    // QWERTY Row 1
+                    val qwertyRow1 = listOf('q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[', ']')
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        qwertyRow1.forEach { ch ->
+                            val display = if (isShiftActive) ch.uppercaseChar().toString() else ch.toString()
+                            CharKeyPill(
+                                primary = display,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                sendCharInput(display[0])
+                            }
+                        }
+                    }
+
+                    // QWERTY Row 2
+                    val qwertyRow2 = listOf('a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'')
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        qwertyRow2.forEach { ch ->
+                            val display = if (isShiftActive) ch.uppercaseChar().toString() else ch.toString()
+                            CharKeyPill(
+                                primary = display,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                sendCharInput(display[0])
+                            }
+                        }
+                        KeyPill(label = "⏎ Enter", modifier = Modifier.weight(1.8f)) {
+                            sendKeyWithModifiers("enter")
+                        }
+                    }
+
+                    // QWERTY Row 3
+                    val qwertyRow3 = listOf('z', 'x', 'c', 'v', 'b', 'n', 'm', ',', '.', '/')
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(3.dp)
+                    ) {
+                        KeyPill(
+                            label = "⇧",
+                            isActive = isShiftActive,
+                            activeColor = Color(0xFF10B981),
+                            modifier = Modifier.weight(1.2f)
+                        ) {
                             triggerHaptic()
-                            sendAction(JSONObject().apply { put("type", "key_press"); put("key", "right") })
+                            isShiftActive = !isShiftActive
+                        }
+                        qwertyRow3.forEach { ch ->
+                            val display = if (isShiftActive) ch.uppercaseChar().toString() else ch.toString()
+                            CharKeyPill(
+                                primary = display,
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                sendCharInput(display[0])
+                            }
+                        }
+                        KeyPill(label = "Del", modifier = Modifier.weight(1.2f)) {
+                            sendKeyWithModifiers("delete")
+                        }
+                    }
+
+                    // Bottom Navigation & Space Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        KeyPill(label = "Space", modifier = Modifier.weight(3f)) {
+                            sendKeyWithModifiers("space")
+                        }
+                        KeyPill(label = "◀", modifier = Modifier.weight(1f)) {
+                            sendKeyWithModifiers("left")
+                        }
+                        KeyPill(label = "▲", modifier = Modifier.weight(1f)) {
+                            sendKeyWithModifiers("up")
+                        }
+                        KeyPill(label = "▼", modifier = Modifier.weight(1f)) {
+                            sendKeyWithModifiers("down")
+                        }
+                        KeyPill(label = "▶", modifier = Modifier.weight(1f)) {
+                            sendKeyWithModifiers("right")
                         }
                     }
                 }
@@ -1651,22 +2143,77 @@ fun RemoteDesktopScreen(
 fun KeyPill(
     label: String,
     modifier: Modifier = Modifier,
+    isActive: Boolean = false,
+    activeColor: Color = Color(0xFF0284C7),
+    textColor: Color = Color.White,
+    height: androidx.compose.ui.unit.Dp = 38.dp,
     onClick: () -> Unit
 ) {
     Box(
         modifier = modifier
-            .height(40.dp)
+            .height(height)
             .clip(RoundedCornerShape(8.dp))
-            .background(Color(0xFF334155))
+            .background(if (isActive) activeColor else Color(0xFF334155))
+            .border(
+                width = if (isActive) 1.5.dp else 1.dp,
+                color = if (isActive) Color(0xFF38BDF8) else Color(0xFF475569),
+                shape = RoundedCornerShape(8.dp)
+            )
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         Text(
             text = label,
-            color = Color.White,
+            color = textColor,
             fontSize = 11.sp,
-            fontWeight = FontWeight.Bold
+            fontWeight = if (isActive) FontWeight.ExtraBold else FontWeight.Bold
         )
+    }
+}
+
+@Composable
+fun CharKeyPill(
+    primary: String,
+    secondary: String? = null,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Box(
+        modifier = modifier
+            .height(38.dp)
+            .clip(RoundedCornerShape(6.dp))
+            .background(Color(0xFF1E293B))
+            .border(1.dp, Color(0xFF334155), RoundedCornerShape(6.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        if (secondary != null) {
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = secondary,
+                    color = Color(0xFF94A3B8),
+                    fontSize = 8.sp,
+                    lineHeight = 9.sp
+                )
+                Text(
+                    text = primary,
+                    color = Color.White,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    lineHeight = 13.sp
+                )
+            }
+        } else {
+            Text(
+                text = primary,
+                color = Color.White,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
     }
 }
 

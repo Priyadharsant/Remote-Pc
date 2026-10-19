@@ -24,7 +24,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Web
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
 
-from controllers import brightness, keyboard, media, mouse, system_controls, volume, video_stream, remote_desktop
+from controllers import brightness, keyboard, media, mouse, system_controls, volume, video_stream, remote_desktop, camera_recorder, folder_sync
 
 
 _LOG_ENTRIES = []
@@ -1204,8 +1204,7 @@ async def ws_remote_desktop(websocket: WebSocket, password: str | None = Query(d
                             try:
                                 h_val = remote_desktop.wintypes.HWND(h)
                                 if remote_desktop.user32.IsIconic(h_val):
-                                    remote_desktop.user32.ShowWindow(h_val, 9)
-                                remote_desktop.user32.SetForegroundWindow(h_val)
+                                    remote_desktop.user32.ShowWindow(h_val, remote_desktop.SW_SHOWNOACTIVATE)
                             except Exception:
                                 pass
                     else:
@@ -1224,6 +1223,10 @@ async def ws_remote_desktop(websocket: WebSocket, password: str | None = Query(d
                     res = remote_desktop.handle_input_action(data)
                     await websocket.send_json({"type": "clipboard_data", "text": res.get("text", "")})
                 else:
+                    if "mode" not in data and "mode" in settings:
+                        data["mode"] = settings["mode"]
+                    if "hwnd" not in data and "hwnd" in settings:
+                        data["hwnd"] = settings["hwnd"]
                     await asyncio.to_thread(remote_desktop.handle_input_action, data)
             except Exception:
                 pass
@@ -1235,6 +1238,179 @@ async def ws_remote_desktop(websocket: WebSocket, password: str | None = Query(d
         settings["active"] = False
         sender_task.cancel()
         log_server_event(f"Remote Desktop disconnected from {client_ip}", "INFO")
+
+# ==============================================================================
+# DIRECT-TO-PC CAMERA RECORDING ROUTES
+# ==============================================================================
+
+@app.get('/camera/status')
+def get_camera_status() -> dict:
+    rec = camera_recorder.get_camera_recorder()
+    return rec.get_status()
+
+@app.post('/camera/start', dependencies=[Depends(require_auth)])
+async def start_camera_recording(request: Request) -> dict:
+    resolution = "1920x1080"
+    fps = 30
+    audio_codec = "AAC 48kHz"
+    orientation = 0
+    try:
+        body = await request.json()
+        if isinstance(body, dict):
+            resolution = body.get("resolution", resolution)
+            fps = int(body.get("fps", fps))
+            audio_codec = body.get("audio", audio_codec)
+            orientation = int(body.get("orientation", 0))
+    except Exception:
+        # Fallback to query parameters if any
+        q = request.query_params
+        resolution = q.get("resolution", resolution)
+        if "fps" in q:
+            try:
+                fps = int(q["fps"])
+            except Exception:
+                pass
+        if "orientation" in q:
+            try:
+                orientation = int(q["orientation"])
+            except Exception:
+                pass
+        audio_codec = q.get("audio", audio_codec)
+
+    rec = camera_recorder.get_camera_recorder()
+    try:
+        res = rec.start_recording(resolution=resolution, fps=fps, audio_codec=audio_codec, orientation=orientation)
+        log_server_event(f"Direct camera recording started: {res.get('filename')} ({resolution} @ {fps}fps, rot={orientation})", "SUCCESS")
+        return res
+    except Exception as e:
+        log_server_event(f"Failed to start camera recording: {e}", "ERROR")
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post('/camera/stop', dependencies=[Depends(require_auth)])
+def stop_camera_recording() -> dict:
+    rec = camera_recorder.get_camera_recorder()
+    res = rec.stop_recording()
+    if res.get("status") == "ok":
+        log_server_event(f"Direct camera recording finalized: {res.get('file_path')} ({round(res.get('file_size_bytes', 0)/(1024*1024), 2)} MB)", "SUCCESS")
+    else:
+        log_server_event(f"Direct camera recording stop warning: {res.get('message')}", "WARNING")
+    return res
+
+@app.post('/camera/destination', dependencies=[Depends(require_auth)])
+async def set_camera_destination(request: Request) -> dict:
+    target_dir = None
+    try:
+        body = await request.json()
+        if isinstance(body, dict):
+            target_dir = body.get("destination_dir") or body.get("dir")
+    except Exception:
+        target_dir = request.query_params.get("dir") or request.query_params.get("destination_dir")
+
+    if not target_dir:
+        raise HTTPException(status_code=400, detail="Missing destination_dir parameter")
+
+    rec = camera_recorder.get_camera_recorder()
+    try:
+        res = rec.set_destination_dir(target_dir)
+        log_server_event(f"Camera destination folder set to: {target_dir}", "INFO")
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get('/camera/recordings')
+def get_camera_recordings(max_items: int = Query(default=50)) -> dict:
+    rec = camera_recorder.get_camera_recorder()
+    return {"recordings": rec.get_recent_recordings(max_items)}
+
+@app.post('/camera/open-folder', dependencies=[Depends(require_auth)])
+def open_camera_folder() -> dict:
+    rec = camera_recorder.get_camera_recorder()
+    folder = rec.destination_dir
+    if not os.path.exists(folder):
+        os.makedirs(folder, exist_ok=True)
+    try:
+        if sys.platform == 'win32':
+            os.startfile(folder)
+        else:
+            subprocess.Popen(['xdg-open', folder])
+        return {"status": "ok", "message": f"Opened folder: {folder}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post('/camera/open-file', dependencies=[Depends(require_auth)])
+async def open_camera_file(request: Request) -> dict:
+    file_path = None
+    try:
+        body = await request.json()
+        if isinstance(body, dict):
+            file_path = body.get("file_path")
+    except Exception:
+        file_path = request.query_params.get("file_path")
+
+    if not file_path or not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File does not exist")
+
+    try:
+        if sys.platform == 'win32':
+            os.startfile(file_path)
+        else:
+            subprocess.Popen(['xdg-open', file_path])
+        return {"status": "ok", "message": f"Opened file: {file_path}"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post('/camera/preview-frame')
+async def post_camera_preview_frame(request: Request) -> dict:
+    try:
+        frame_bytes = await request.body()
+        if frame_bytes and len(frame_bytes) > 100:
+            rec = camera_recorder.get_camera_recorder()
+            rec.update_preview_frame(frame_bytes)
+            return {"status": "ok"}
+        return {"status": "error", "message": "Invalid frame bytes"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+@app.get('/camera/preview')
+def get_camera_preview():
+    rec = camera_recorder.get_camera_recorder()
+    frame = rec.get_latest_preview_frame()
+    if frame:
+        import io
+        return StreamingResponse(io.BytesIO(frame), media_type="image/jpeg")
+    raise HTTPException(status_code=204, detail="No active preview frame")
+
+@app.get('/camera/mjpeg-stream')
+async def get_camera_mjpeg_stream():
+    rec = camera_recorder.get_camera_recorder()
+    async def frame_streamer():
+        while True:
+            frame = rec.get_latest_preview_frame()
+            if frame:
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
+            await asyncio.sleep(0.033) # 30 FPS stream
+    return StreamingResponse(frame_streamer(), media_type="multipart/x-mixed-replace; boundary=frame")
+
+@app.post('/camera/client-state')
+def set_camera_client_state(state: str = Query(default="open")) -> dict:
+    rec = camera_recorder.get_camera_recorder()
+    rec.set_client_state(state)
+    return {"status": "ok", "state": state}
+
+@app.post('/camera/snapshot')
+def take_camera_snapshot() -> dict:
+    rec = camera_recorder.get_camera_recorder()
+    try:
+        res = rec.save_snapshot()
+        log_server_event(f"Camera photo captured: {res.get('filename')}", "SUCCESS")
+        return res
+    except Exception as e:
+        log_server_event(f"Failed to capture camera photo: {e}", "ERROR")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+
 
 @app.post('/player/open', dependencies=[Depends(require_auth)])
 @app.post('/media/play-on-pc', dependencies=[Depends(require_auth)])
@@ -1419,20 +1595,36 @@ def send_toast_to_phone(ip: str = Query(...), message: str = Query(...)) -> dict
         return {'status': 'error', 'detail': str(e)}
 
 @app.post('/phone/action')
-def trigger_phone_action(ip: str = Query(...), action: str = Query(...), value: str = Query(default="")) -> dict:
+def trigger_phone_action(ip: str = Query(default=""), action: str = Query(...), value: str = Query(default="")) -> dict:
     import urllib.parse
     import urllib.request
-    try:
-        url = f"http://{ip}:5056/action?type={urllib.parse.quote(action)}&value={urllib.parse.quote(value)}"
-        req = urllib.request.Request(url, method="GET")
-        with urllib.request.urlopen(req, timeout=2.5) as resp:
-            data = resp.read().decode('utf-8')
-            try:
-                return json.loads(data)
-            except Exception:
-                return {'status': 'ok', 'response': resp.status}
-    except Exception as e:
-        return {'status': 'error', 'detail': str(e)}
+    _auto_forward_adb()
+
+    targets = []
+    if ip and ip.strip():
+        targets.append(ip.strip())
+    for c in CONNECTED_CLIENTS.values():
+        cip = c.get('ip')
+        if cip and cip not in targets:
+            targets.append(cip)
+    targets.extend(["127.0.0.1:15056", "127.0.0.1:5056"])
+
+    last_err = ""
+    for target in targets:
+        base = target if target.startswith("http://") else (f"http://{target}" if ":" in target else f"http://{target}:5056")
+        url = f"{base}/action?type={urllib.parse.quote(action)}&value={urllib.parse.quote(value)}"
+        try:
+            req = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(req, timeout=2.5) as resp:
+                data = resp.read().decode('utf-8')
+                try:
+                    return json.loads(data)
+                except Exception:
+                    return {'status': 'ok', 'response': resp.status}
+        except Exception as e:
+            last_err = str(e)
+            continue
+    return {'status': 'error', 'detail': last_err or 'No phone responded'}
 
 @app.get('/phone/device-info')
 def get_phone_device_info(ip: str = Query(...)) -> dict:
@@ -1934,6 +2126,59 @@ def apply_update_download(download_url: str = Query(...)) -> dict:
 @app.get('/system/update/status')
 def get_update_status() -> dict:
     return _UPDATE_STATE
+
+# ==============================================================================
+# FOLDER SYNC ROUTES (Mobile -> Specific PC Folder)
+# ==============================================================================
+
+def verify_sync_request(request: Request, token: str | None = None) -> None:
+    client_ip = request.client.host if request.client else "127.0.0.1"
+    if client_ip in ('127.0.0.1', '::1', 'localhost'):
+        return
+    auth_header = request.headers.get("x-remote-password")
+    if not (check_auth(auth_header, None, client_ip) or (token and check_auth(token, None, client_ip))):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+@app.get('/sync/status')
+def get_sync_status(request: Request) -> dict:
+    verify_sync_request(request)
+    return folder_sync.get_sync_status()
+
+@app.post('/sync/destination')
+async def set_sync_destination(request: Request) -> dict:
+    verify_sync_request(request)
+    body = await request.json()
+    new_dir = body.get("destination_dir")
+    if not new_dir:
+        raise HTTPException(status_code=400, detail="destination_dir is required")
+    try:
+        return folder_sync.set_destination_dir(new_dir)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post('/sync/upload')
+async def upload_sync_file(
+    request: Request,
+    relative_path: str = Query(...),
+    token: str | None = Query(default=None)
+) -> dict:
+    verify_sync_request(request, token)
+
+    file_bytes = await request.body()
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="No file content received")
+
+    try:
+        res = folder_sync.save_uploaded_file(file_bytes, relative_path)
+        log_server_event(f"Synced file received: {res['filename']} ({round(res['size_bytes']/1024, 1)} KB)", "SUCCESS")
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get('/sync/history')
+def get_sync_history(request: Request) -> dict:
+    verify_sync_request(request)
+    return {"status": "ok", "history": folder_sync.get_sync_history()}
 
 if __name__ == '__main__':
     # Single-instance check: if server is already running, exit immediately

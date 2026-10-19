@@ -508,6 +508,16 @@ class VideoStreamServer(
         val am = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
 
         when (action) {
+            "open_camera" -> {
+                CameraActionBridge.onOpenRequested?.invoke()
+            }
+            "start_camera_record", "stop_camera_record", "flip_camera", "toggle_torch", "toggle_mic" -> {
+                if (CameraActionBridge.isCameraScreenActive) {
+                    CameraActionBridge.onAction?.invoke(action, value)
+                } else if (action == "start_camera_record") {
+                    CameraActionBridge.onOpenRequested?.invoke()
+                }
+            }
             "flashlight" -> {
                 try {
                     val cam = context.getSystemService(Context.CAMERA_SERVICE) as? CameraManager

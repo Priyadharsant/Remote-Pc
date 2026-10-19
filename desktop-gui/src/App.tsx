@@ -1,14 +1,13 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { TitleBar } from './components/TitleBar';
 import { Sidebar } from './components/Sidebar';
 import type { TabKey } from './components/Sidebar';
 import { ServerDetails } from './components/ServerDetails';
 import { DeviceInfo } from './components/DeviceInfo';
-import { ScreenMirror } from './components/ScreenMirror';
+import { CameraRecording } from './components/CameraRecording';
+import { FolderSync } from './components/FolderSync';
 import { MobileControls } from './components/MobileControls';
 import { FileManager } from './components/FileManager';
-import { AppsManager } from './components/AppsManager';
-import { NotificationsCenter } from './components/NotificationsCenter';
 import { Security } from './components/Security';
 import { Settings } from './components/Settings';
 import { SetupWizard } from './components/SetupWizard';
@@ -27,6 +26,7 @@ export function App() {
   const [pairRequests, setPairRequests] = useState<PairingRequest[]>([]);
   const [updateModalOpen, setUpdateModalOpen] = useState<boolean>(false);
   const [updateData, setUpdateData] = useState<AppUpdateData | null>(null);
+  const prevPhoneCamActiveRef = useRef<boolean>(false);
 
   const fetchAllData = useCallback(async () => {
     try {
@@ -48,6 +48,16 @@ export function App() {
     try {
       const requests = await api.getPairingRequests();
       setPairRequests(requests);
+    } catch {
+      // Non-critical
+    }
+
+    try {
+      const cam = await api.getCameraStatus();
+      if (cam?.phone_camera_active && !prevPhoneCamActiveRef.current) {
+        setActiveTab('camera-record');
+      }
+      prevPhoneCamActiveRef.current = Boolean(cam?.phone_camera_active);
     } catch {
       // Non-critical
     }
@@ -224,8 +234,14 @@ export function App() {
             />
           )}
 
-          {activeTab === 'screen' && (
-            <ScreenMirror
+          {activeTab === 'camera-record' && (
+            <CameraRecording
+              status={status}
+            />
+          )}
+
+          {activeTab === 'folder-sync' && (
+            <FolderSync
               status={status}
             />
           )}
@@ -239,18 +255,6 @@ export function App() {
 
           {activeTab === 'files' && (
             <FileManager
-              status={status}
-            />
-          )}
-
-          {activeTab === 'apps' && (
-            <AppsManager
-              status={status}
-            />
-          )}
-
-          {activeTab === 'notifications' && (
-            <NotificationsCenter
               status={status}
             />
           )}

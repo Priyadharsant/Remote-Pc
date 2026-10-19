@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Tray, Menu, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, shell, dialog } = require('electron');
 const path = require('path');
 const os = require('os');
 const https = require('https');
@@ -379,6 +379,22 @@ ipcMain.handle('shell:open-folder', async (_, folderPath) => {
   if (!fs.existsSync(target)) fs.mkdirSync(target, { recursive: true });
   await shell.openPath(target);
   return true;
+});
+
+ipcMain.handle('dialog:open-directory', async (_, defaultPath) => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Select Destination Folder for Sync',
+      defaultPath: (defaultPath && fs.existsSync(defaultPath)) ? defaultPath : undefined,
+      properties: ['openDirectory', 'createDirectory']
+    });
+    if (!result.canceled && result.filePaths && result.filePaths.length > 0) {
+      return result.filePaths[0];
+    }
+  } catch (err) {
+    console.error('Error in dialog:open-directory:', err);
+  }
+  return null;
 });
 
 ipcMain.handle('shell:open-file', async (_, filePath) => {

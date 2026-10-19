@@ -12,7 +12,7 @@ pyautogui.PAUSE = 0
 _MAX_MOVE_STEP = 120
 _MIN_SENSITIVITY = 0.3
 _MAX_SENSITIVITY = 4.0
-_SCROLL_STEP = 80
+_SCROLL_STEP = 20
 _ZOOM_THRESHOLD = 0.12
 
 _mouse_lock = threading.Lock()
@@ -63,14 +63,14 @@ def drag_end() -> None:
         pyautogui.mouseUp()
 
 def scroll_vertical(delta: float) -> None:
-    amount = int(round(_clamp(delta * _SCROLL_STEP, -480, 480)))
+    amount = int(round(_clamp(delta * _SCROLL_STEP, -240, 240)))
     if amount == 0:
         return
     with _mouse_lock:
         pyautogui.scroll(amount)
 
 def scroll_horizontal(delta: float) -> None:
-    amount = int(round(_clamp(delta * _SCROLL_STEP, -480, 480)))
+    amount = int(round(_clamp(delta * _SCROLL_STEP, -240, 240)))
     if amount == 0:
         return
     with _mouse_lock:
