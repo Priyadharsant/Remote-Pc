@@ -65,8 +65,28 @@ export function App() {
 
   useEffect(() => {
     fetchAllData();
-    const interval = setInterval(fetchAllData, 3000);
-    return () => clearInterval(interval);
+    let timerId: any = null;
+
+    const runPoll = async () => {
+      // Throttle polling if window is minimized or hidden in background to save CPU and battery
+      const nextInterval = document.hidden ? 12000 : 3000;
+      await fetchAllData();
+      timerId = setTimeout(runPoll, nextInterval);
+    };
+
+    const handleVisibility = () => {
+      if (!document.hidden) {
+        fetchAllData();
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibility);
+    timerId = setTimeout(runPoll, 3000);
+
+    return () => {
+      if (timerId) clearTimeout(timerId);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
   }, [fetchAllData]);
 
   // Check for updates immediately on open

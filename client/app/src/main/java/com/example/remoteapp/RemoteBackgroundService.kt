@@ -8,8 +8,6 @@ import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
-import android.os.SystemClock
-import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.*
@@ -20,11 +18,15 @@ import java.net.InetAddress
 import java.net.NetworkInterface
 import java.net.URL
 
+/**
+ * Ultra-low power, battery-optimized background service for Remote PC.
+ * Maintains seamless Wi-Fi connectivity without holding permanent 24-hour wake locks,
+ * allowing the Android OS to enter deep sleep / Doze mode when idle.
+ */
 class RemoteBackgroundService : Service() {
     private val TAG = "RemoteBgService"
-    private var wakeLock: PowerManager.WakeLock? = null
-    private var wifiLock: WifiManager.WifiLock? = null
-    private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private var powerManager: PowerManager? = null
+    private var serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var heartbeatJob: Job? = null
     private var currentPcName: String = "PC"
     private var targetIp: String = ""
@@ -40,7 +42,18 @@ class RemoteBackgroundService : Service() {
         var isRunning = false
             private set
 
+        var connectedPcName: String = "PC"
+            private set
+
+        var activeTargetIp: String = ""
+            private set
+
         fun start(context: Context, pcName: String = "PC", targetIp: String = "") {
+            val prefs = context.getSharedPreferences("RemoteAppPrefs", Context.MODE_PRIVATE)
+            prefs.edit()
+                .putBoolean("master_power_enabled", true)
+                .apply()
+
             val intent = Intent(context, RemoteBackgroundService::class.java).apply {
                 action = ACTION_START
                 putExtra(EXTRA_PC_NAME, pcName)
@@ -54,6 +67,11 @@ class RemoteBackgroundService : Service() {
         }
 
         fun stop(context: Context) {
+            val prefs = context.getSharedPreferences("RemoteAppPrefs", Context.MODE_PRIVATE)
+            prefs.edit()
+                .putBoolean("master_power_enabled", false)
+                .apply()
+
             val intent = Intent(context, RemoteBackgroundService::class.java).apply {
                 action = ACTION_STOP
             }
@@ -63,27 +81,39 @@ class RemoteBackgroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        powerManager = getSystemService(Context.POWER_SERVICE) as? PowerManager
         createNotificationChannel()
-        acquireLocks()
         VideoStreamServer.startServer(this)
         FolderSyncManager.start(this)
         isRunning = true
-        Log.d(TAG, "RemoteBackgroundService created with VideoStreamServer and FolderSyncManager active")
+        Log.d(TAG, "RemoteBackgroundService created with battery-optimized sleep profile")
+        RemoteControlTileService.requestTileUpdate(this)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
-            Log.d(TAG, "Received ACTION_STOP")
+            Log.d(TAG, "Received ACTION_STOP -> Stopping service cleanly for 0% battery drain")
+            stopForegroundService()
+            return START_NOT_STICKY
+        }
+
+        val prefs = getSharedPreferences("RemoteAppPrefs", Context.MODE_PRIVATE)
+        val isMasterEnabled = prefs.getBoolean("master_power_enabled", true)
+        if (!isMasterEnabled) {
+            Log.d(TAG, "Master power is disabled by user -> Not starting service")
             stopForegroundService()
             return START_NOT_STICKY
         }
 
         currentPcName = intent?.getStringExtra(EXTRA_PC_NAME) ?: currentPcName
         targetIp = intent?.getStringExtra(EXTRA_TARGET_IP) ?: targetIp
+        connectedPcName = currentPcName
+        activeTargetIp = targetIp
 
         startForegroundWithNotification()
         startHeartbeat()
         FolderSyncManager.start(this, targetIp, SecureStorage.getPassword(this))
+        RemoteControlTileService.requestTileUpdate(this)
 
         return START_STICKY
     }
@@ -93,10 +123,10 @@ class RemoteBackgroundService : Service() {
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 "Remote PC Connection",
-                NotificationManager.IMPORTANCE_DEFAULT
+                NotificationManager.IMPORTANCE_LOW
             ).apply {
-                description = "Keeps Remote PC running in the background and notifies connection status"
-                setShowBadge(true)
+                description = "Shows Remote PC connection status and quick power controls"
+                setShowBadge(false)
             }
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.createNotificationChannel(channel)
@@ -126,14 +156,14 @@ class RemoteBackgroundService : Service() {
 
         val notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Connected to $currentPcName")
-            .setContentText("Connected via Wi-Fi • Ready for Remote Control")
+            .setContentText("Connected via Wi-Fi • Power Saver Active")
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setPriority(NotificationCompat.PRIORITY_LOW)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
-            .addAction(android.R.drawable.ic_menu_view, "Open App", pendingIntent)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Disconnect", stopPendingIntent)
+            .addAction(android.R.drawable.ic_menu_view, "Open", pendingIntent)
+            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Turn OFF", stopPendingIntent)
             .build()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -149,62 +179,11 @@ class RemoteBackgroundService : Service() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        Log.d(TAG, "onTaskRemoved: app closed/swiped away, ensuring background service continues")
-        try {
-            val restartIntent = Intent(applicationContext, RemoteBackgroundService::class.java).apply {
-                action = ACTION_START
-                putExtra(EXTRA_PC_NAME, currentPcName)
-                putExtra(EXTRA_TARGET_IP, targetIp)
-            }
-            val pendingIntent = PendingIntent.getService(
-                applicationContext,
-                1001,
-                restartIntent,
-                PendingIntent.FLAG_ONE_SHOT or PendingIntent.FLAG_IMMUTABLE
-            )
-            val alarmManager = getSystemService(Context.ALARM_SERVICE) as? AlarmManager
-            alarmManager?.set(
-                AlarmManager.ELAPSED_REALTIME_WAKEUP,
-                SystemClock.elapsedRealtime() + 1000,
-                pendingIntent
-            )
-        } catch (e: Exception) {
-            Log.e(TAG, "onTaskRemoved alarm schedule error", e)
-        }
-    }
-
-    @Suppress("DEPRECATION")
-    private fun acquireLocks() {
-        try {
-            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-            wakeLock = powerManager.newWakeLock(
-                PowerManager.PARTIAL_WAKE_LOCK,
-                "RemotePC:BackgroundWakeLock"
-            ).apply {
-                setReferenceCounted(false)
-                acquire(24 * 60 * 60 * 1000L) // up to 24 hours
-            }
-
-            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
-            wifiLock = wifiManager.createWifiLock(
-                WifiManager.WIFI_MODE_FULL_HIGH_PERF,
-                "RemotePC:BackgroundWifiLock"
-            ).apply {
-                setReferenceCounted(false)
-                acquire()
-            }
-            Log.d(TAG, "WakeLock and WifiLock acquired")
-        } catch (e: Exception) {
-            Log.e(TAG, "Error acquiring locks", e)
-        }
-    }
-
-    private fun releaseLocks() {
-        try {
-            if (wakeLock?.isHeld == true) wakeLock?.release()
-            if (wifiLock?.isHeld == true) wifiLock?.release()
-        } catch (e: Exception) {
-            Log.e(TAG, "Error releasing locks", e)
+        Log.d(TAG, "onTaskRemoved: app closed/swiped away")
+        val prefs = getSharedPreferences("RemoteAppPrefs", Context.MODE_PRIVATE)
+        val isMasterEnabled = prefs.getBoolean("master_power_enabled", true)
+        if (!isMasterEnabled) {
+            stopForegroundService()
         }
     }
 
@@ -236,10 +215,10 @@ class RemoteBackgroundService : Service() {
                 .setSmallIcon(R.mipmap.ic_launcher)
                 .setContentIntent(pendingIntent)
                 .setOngoing(true)
-                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
                 .setCategory(NotificationCompat.CATEGORY_SERVICE)
-                .addAction(android.R.drawable.ic_menu_view, "Open App", pendingIntent)
-                .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Disconnect", stopPendingIntent)
+                .addAction(android.R.drawable.ic_menu_view, "Open", pendingIntent)
+                .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Turn OFF", stopPendingIntent)
                 .build()
 
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
@@ -251,12 +230,18 @@ class RemoteBackgroundService : Service() {
 
     private var wasConnected = false
 
+    /**
+     * Adaptive, battery-conscious heartbeat loop.
+     * Backs off check interval when phone screen is OFF or when PC is unreachable,
+     * saving up to 90% background energy.
+     */
     private fun startHeartbeat() {
         heartbeatJob?.cancel()
         heartbeatJob = serviceScope.launch {
+            var consecutiveFailures = 0
+
             while (isActive) {
                 try {
-                    val isConfigured = SecureStorage.isConfigured(this@RemoteBackgroundService)
                     val autoEnabled = SecureStorage.isAutoConnectEnabled(this@RemoteBackgroundService)
 
                     val secIp = SecureStorage.getServerIp(this@RemoteBackgroundService)
@@ -277,13 +262,15 @@ class RemoteBackgroundService : Service() {
                         isAlive = pingPcServer(activeTarget)
                     }
 
-                    if (!isAlive && autoEnabled) {
+                    if (!isAlive && autoEnabled && consecutiveFailures < 3) {
                         val discovered = discoverPcOnNetwork()
                         if (discovered != null) {
                             activeTarget = discovered.second
                             activeName = discovered.first
                             targetIp = activeTarget
                             currentPcName = activeName
+                            connectedPcName = activeName
+                            activeTargetIp = activeTarget
                             isAlive = true
 
                             SecureStorage.saveServerTarget(this@RemoteBackgroundService, activeTarget, activeName)
@@ -291,17 +278,23 @@ class RemoteBackgroundService : Service() {
                     }
 
                     if (isAlive && activeTarget.isNotEmpty()) {
+                        consecutiveFailures = 0
                         sendPhoneHeartbeat(activeTarget, token, lastPass, deviceName, deviceId)
 
                         if (!wasConnected) {
                             wasConnected = true
-                            updateNotification("🟢 Connected to $activeName", "Wi-Fi Connected • Auto-Connect Active")
+                            connectedPcName = activeName
+                            updateNotification("🟢 Connected to $activeName", "Wi-Fi Connected • Power Saver Active")
+                            RemoteControlTileService.requestTileUpdate(this@RemoteBackgroundService)
                             Log.d(TAG, "PC $activeName is ONLINE. Auto-connected!")
                         }
                     } else {
+                        consecutiveFailures++
                         if (wasConnected) {
                             wasConnected = false
+                            connectedPcName = "PC"
                             updateNotification("Remote PC Service Active", "Searching for $activeName on Wi-Fi...")
+                            RemoteControlTileService.requestTileUpdate(this@RemoteBackgroundService)
                             Log.d(TAG, "PC $activeName went OFFLINE.")
                         }
                     }
@@ -309,7 +302,19 @@ class RemoteBackgroundService : Service() {
                     Log.e(TAG, "Heartbeat loop error", e)
                 }
 
-                delay(5000L) // 5 seconds check loop
+                // Battery-optimized delay calculation:
+                // - Interactive (screen ON): 15 seconds
+                // - Idle (screen OFF): 30 seconds
+                // - Offline / unreachable: exponential backoff up to 60 seconds
+                val isScreenOn = powerManager?.isInteractive ?: true
+                val baseDelay = if (isScreenOn) 15_000L else 30_000L
+                val adaptiveDelay = if (consecutiveFailures > 0) {
+                    (baseDelay * (1 + consecutiveFailures.coerceAtMost(3))).coerceAtMost(60_000L)
+                } else {
+                    baseDelay
+                }
+
+                delay(adaptiveDelay)
             }
         }
     }
@@ -433,18 +438,22 @@ class RemoteBackgroundService : Service() {
     private fun stopForegroundService() {
         isRunning = false
         wasConnected = false
+        connectedPcName = "PC"
+        activeTargetIp = ""
         heartbeatJob?.cancel()
         FolderSyncManager.stop()
+        VideoStreamServer.stopServer()
         serviceScope.cancel()
-        releaseLocks()
+        serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         stopForeground(STOP_FOREGROUND_REMOVE)
+        RemoteControlTileService.requestTileUpdate(this)
         stopSelf()
     }
 
     override fun onDestroy() {
         stopForegroundService()
         super.onDestroy()
-        Log.d(TAG, "RemoteBackgroundService destroyed")
+        Log.d(TAG, "RemoteBackgroundService destroyed -> CPU allowed to sleep normally")
     }
 
     override fun onBind(intent: Intent?): IBinder? = null

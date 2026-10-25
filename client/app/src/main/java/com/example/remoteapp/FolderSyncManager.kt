@@ -88,6 +88,8 @@ object FolderSyncManager {
         unregisterObserver()
         syncJob?.cancel()
         syncJob = null
+        debounceJob?.cancel()
+        debounceJob = null
     }
 
     private fun loadSettings(context: Context) {
@@ -220,17 +222,18 @@ object FolderSyncManager {
         syncJob = syncScope.launch {
             while (isActive) {
                 try {
-                    // Check PC status periodically
-                    fetchPcStatus(appContext, explicitIp, explicitPass)
-
                     val curr = _stateFlow.value
                     if (curr.isEnabled && !curr.folderUri.isNullOrBlank()) {
+                        fetchPcStatus(appContext, explicitIp, explicitPass)
                         performSync(appContext, explicitIp, explicitPass)
+                        delay(45_000L) // 45s fallback scan interval (instant detection handles immediate triggers via ContentObserver)
+                    } else {
+                        delay(60_000L) // 60s idle interval when sync is disabled
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Background sync tick error: ${e.message}")
+                    delay(30_000L)
                 }
-                delay(1200) // 1.2s rapid fallback interval (instant detection handles immediate triggers)
             }
         }
     }

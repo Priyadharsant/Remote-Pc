@@ -20,6 +20,10 @@
 *.zip
 *.tar.gz
 *.7z
+*.mkv
+*.mp4
+*.mov
+*.avi
 Remote PC.apk
 Remote_PC_Setup.exe
 Remote_Server.exe

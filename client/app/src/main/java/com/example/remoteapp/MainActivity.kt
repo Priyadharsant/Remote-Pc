@@ -702,7 +702,8 @@ class MainActivity : FragmentActivity() {
         startVideoServer()
 
         val saved = getSavedCredentials()
-        if (saved != null) {
+        val masterPowerInit = initPrefs.getBoolean("master_power_enabled", true)
+        if (saved != null && masterPowerInit) {
             RemoteBackgroundService.start(this, saved.first, saved.second)
         }
 
@@ -728,6 +729,48 @@ class MainActivity : FragmentActivity() {
                 ) {
                     var currentScreen by remember { mutableStateOf("splash") }
                     var selectedDevice by remember { mutableStateOf<Pair<String, String>?>(null) }
+                    val appPrefs = remember { getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE) }
+                    var isMasterPower by remember { mutableStateOf(appPrefs.getBoolean("master_power_enabled", true)) }
+
+                    val lifecycleOwner = androidx.lifecycle.compose.LocalLifecycleOwner.current
+                    DisposableEffect(lifecycleOwner) {
+                        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+                            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                                isMasterPower = appPrefs.getBoolean("master_power_enabled", true)
+                            }
+                        }
+                        lifecycleOwner.lifecycle.addObserver(observer)
+                        onDispose {
+                            lifecycleOwner.lifecycle.removeObserver(observer)
+                        }
+                    }
+
+                    val toggleMasterPower: (Boolean) -> Unit = { enabled ->
+                        isMasterPower = enabled
+                        appPrefs.edit().putBoolean("master_power_enabled", enabled).apply()
+                        if (enabled) {
+                            val curDev = selectedDevice
+                            if (curDev != null) {
+                                RemoteBackgroundService.start(this@MainActivity, curDev.first, curDev.second)
+                            } else {
+                                val savedCreds = getSavedCredentials()
+                                if (savedCreds != null) {
+                                    RemoteBackgroundService.start(this@MainActivity, savedCreds.first, savedCreds.second)
+                                } else {
+                                    val lastIp = appPrefs.getString("last_ip", "") ?: ""
+                                    val lastName = appPrefs.getString("last_name", "PC") ?: "PC"
+                                    RemoteBackgroundService.start(this@MainActivity, lastName, lastIp)
+                                }
+                            }
+                            RemoteControlTileService.requestTileUpdate(this@MainActivity)
+                            Toast.makeText(this@MainActivity, "Remote PC service activated", Toast.LENGTH_SHORT).show()
+                        } else {
+                            RemoteBackgroundService.stop(this@MainActivity)
+                            FolderSyncManager.stop()
+                            RemoteControlTileService.requestTileUpdate(this@MainActivity)
+                            Toast.makeText(this@MainActivity, "Remote PC service turned OFF (0% battery drain)", Toast.LENGTH_SHORT).show()
+                        }
+                    }
 
                     DisposableEffect(Unit) {
                         CameraActionBridge.onOpenRequested = {
@@ -1275,6 +1318,8 @@ class MainActivity : FragmentActivity() {
                                     DiscoveryScreen(
                                         devices = discoveredDevices,
                                         isScanning = isScanningServers,
+                                        isMasterPower = isMasterPower,
+                                        onToggleMasterPower = toggleMasterPower,
                                         onSelect = { handleSelectDevice(it) },
                                         onRefresh = {
                                             discoveredDevices = emptyList()
@@ -1302,6 +1347,8 @@ class MainActivity : FragmentActivity() {
                                         volume = currentVolume,
                                         brightness = currentBrightness,
                                         isAutoConnected = isAutoConnected,
+                                        isMasterPower = isMasterPower,
+                                        onToggleMasterPower = toggleMasterPower,
                                         onSetupAutoConnect = {
                                             if (isAutoConnected) {
                                                 prefs.edit().putBoolean(KEY_AUTO_CONNECT_ENABLED, false).apply()
@@ -1781,11 +1828,97 @@ fun SplashScreen(onFinish: () -> Unit) {
     }
 }
 
+@Composable
+fun MasterPowerCard(
+    isEnabled: Boolean,
+    onToggle: (Boolean) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = if (isEnabled) AppTheme.CardDarkElevated else Color(0xFF1E1717)
+        ),
+        border = BorderStroke(
+            1.dp,
+            if (isEnabled) AppTheme.AccentEmerald.copy(alpha = 0.5f) else AppTheme.AccentRose.copy(alpha = 0.4f)
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (isEnabled) AppTheme.AccentEmerald.copy(alpha = 0.15f)
+                        else AppTheme.AccentRose.copy(alpha = 0.15f)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.PowerSettingsNew,
+                    contentDescription = "Master Power",
+                    tint = if (isEnabled) AppTheme.AccentEmerald else AppTheme.AccentRose,
+                    modifier = Modifier.size(24.dp)
+                )
+            }
+
+            Spacer(Modifier.width(14.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = if (isEnabled) "Service Active" else "Service Paused",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        color = AppTheme.TextPrimary
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(8.dp)
+                            .clip(CircleShape)
+                            .background(if (isEnabled) AppTheme.AccentEmerald else AppTheme.AccentRose)
+                    )
+                }
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = if (isEnabled) "Background sync & remote commands ready" else "Complete shutdown • 0% battery drain",
+                    fontSize = 12.sp,
+                    color = if (isEnabled) AppTheme.TextSecondary else AppTheme.AccentRose.copy(alpha = 0.85f),
+                    lineHeight = 16.sp
+                )
+            }
+
+            Spacer(Modifier.width(8.dp))
+
+            Switch(
+                checked = isEnabled,
+                onCheckedChange = onToggle,
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = AppTheme.AccentEmerald,
+                    uncheckedThumbColor = Color.LightGray,
+                    uncheckedTrackColor = Color.DarkGray
+                )
+            )
+        }
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DiscoveryScreen(
     devices: List<Pair<String, String>>,
     isScanning: Boolean = false,
+    isMasterPower: Boolean = true,
+    onToggleMasterPower: (Boolean) -> Unit = {},
     onSelect: (Pair<String, String>) -> Unit,
     onRefresh: () -> Unit,
     onScanQrClick: () -> Unit,
@@ -1808,6 +1941,13 @@ fun DiscoveryScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { onToggleMasterPower(!isMasterPower) }) {
+                        Icon(
+                            Icons.Rounded.PowerSettingsNew,
+                            contentDescription = if (isMasterPower) "Turn Service OFF" else "Turn Service ON",
+                            tint = if (isMasterPower) AppTheme.AccentEmerald else AppTheme.AccentRose
+                        )
+                    }
                     IconButton(onClick = onScanQrClick) {
                         Icon(Icons.Rounded.QrCodeScanner, contentDescription = "Scan QR Code", tint = AppTheme.AccentCyan)
                     }
@@ -1839,6 +1979,12 @@ fun DiscoveryScreen(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            MasterPowerCard(
+                isEnabled = isMasterPower,
+                onToggle = onToggleMasterPower,
+                modifier = Modifier.padding(bottom = 14.dp)
+            )
+
             LiquidScanner(isScanning = isScanning || devices.isEmpty())
 
             Spacer(Modifier.height(16.dp))
@@ -2123,6 +2269,8 @@ fun RemoteControlScreen(
     volume: Float,
     brightness: Float,
     isAutoConnected: Boolean = false,
+    isMasterPower: Boolean = true,
+    onToggleMasterPower: (Boolean) -> Unit = {},
     onSetupAutoConnect: () -> Unit = {},
     onVolumeChange: (Float) -> Unit,
     onBrightnessChange: (Float) -> Unit,
@@ -2160,6 +2308,13 @@ fun RemoteControlScreen(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { onToggleMasterPower(!isMasterPower) }) {
+                        Icon(
+                            Icons.Rounded.PowerSettingsNew,
+                            contentDescription = if (isMasterPower) "Turn Service OFF" else "Turn Service ON",
+                            tint = if (isMasterPower) AppTheme.AccentEmerald else AppTheme.AccentRose
+                        )
+                    }
                     IconButton(onClick = onRefreshStatus) {
                         Icon(Icons.Rounded.Refresh, contentDescription = "Sync", tint = AppTheme.AccentCyan)
                     }
@@ -2178,6 +2333,11 @@ fun RemoteControlScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
+            MasterPowerCard(
+                isEnabled = isMasterPower,
+                onToggle = onToggleMasterPower,
+                modifier = Modifier.padding(bottom = 16.dp)
+            )
             // Hero PC Status Card
             Card(
                 modifier = Modifier.fillMaxWidth(),
