@@ -21,9 +21,11 @@ import os
 import sys
 import re
 import json
+import time
 import hashlib
 import argparse
 import subprocess
+import requests
 import urllib.request
 import urllib.error
 import urllib.parse
@@ -243,18 +245,51 @@ def publish_release(token: str, repo: str, tag: str, title: str, notes: str, dra
         html_url = created.get("html_url", "")
         print(f"✅ Created release: {html_url}")
 
-    # 3. Upload assets
+    # 3. Upload assets with streaming and auto-retry
     for filepath, filename, content_type in assets_to_upload:
         size_mb = filepath.stat().st_size / (1024 * 1024)
         print(f"⬆️  Uploading {filename} ({size_mb:.2f} MB)...")
-        file_bytes = filepath.read_bytes()
         upload_target = f"{upload_url}?name={urllib.parse.quote(filename)}"
-        try:
-            github_api_request(upload_target, token, method="POST", data=file_bytes, content_type=content_type)
-            print(f"   ✅ Successfully uploaded {filename}")
-        except Exception as e:
-            print(f"   ❌ Upload failed for {filename}: {e}")
-            raise
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "RemotePC-Release-Publisher",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "Content-Type": content_type,
+            "Content-Length": str(filepath.stat().st_size)
+        }
+
+        max_retries = 3
+        uploaded_successfully = False
+        for attempt in range(1, max_retries + 1):
+            try:
+                # Remove any existing or failed partial asset before uploading
+                try:
+                    curr_rel = github_api_request(f"https://api.github.com/repos/{repo}/releases/tags/{tag}", token)
+                    for a in curr_rel.get("assets", []):
+                        if a.get("name") == filename:
+                            print(f"   🧹 Cleaning up existing asset {filename} (ID: {a['id']})...")
+                            github_api_request(f"https://api.github.com/repos/{repo}/releases/assets/{a['id']}", token, method="DELETE")
+                except Exception:
+                    pass
+
+                print(f"   📡 Streaming upload (attempt {attempt}/{max_retries})...")
+                with open(filepath, "rb") as f:
+                    resp = requests.post(upload_target, data=f, headers=headers, timeout=1800)
+                if resp.status_code in (200, 201):
+                    print(f"   ✅ Successfully uploaded {filename}")
+                    uploaded_successfully = True
+                    break
+                else:
+                    print(f"   ⚠️ Upload returned status {resp.status_code}: {resp.text[:200]}")
+            except Exception as e:
+                print(f"   ⚠️ Upload attempt {attempt} failed for {filename}: {e}")
+
+            if attempt < max_retries:
+                time.sleep(4 * attempt)
+
+        if not uploaded_successfully:
+            raise RuntimeError(f"❌ Failed to upload {filename} after {max_retries} attempts.")
 
     print("\n" + "=" * 65)
     print(" 🎉 RELEASE DEPLOYED SUCCESSFULLY TO GITHUB!")
