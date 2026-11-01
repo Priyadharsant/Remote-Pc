@@ -1,11 +1,16 @@
 {
   "name": "remote-pc-workspace",
-  "version": "3.3.0",
+  "version": "3.4.0",
   "private": true,
   "type": "module",
   "scripts": {
     "start": "node scripts/menu.js",
+    "start:ubuntu": "./start_ubuntu.sh",
     "menu": "node scripts/menu.js",
+    "build:linux": "python3 build_linux.py",
+    "build:linux:server": "python3 build_linux.py --server-only",
+    "build:linux:gui": "python3 build_linux.py --gui-only",
+    "build:linux:clean": "python3 build_linux.py --clean",
     "build:exe": "python build_exe.py",
     "build:fast": "python build_exe.py --fast",
     "build:installer": "python build_exe.py --installer-only",

@@ -109,7 +109,7 @@ export function App() {
     ? Object.values(status.connected_clients_map)[0]?.name
     : null;
 
-  const isConfigured = status?.is_configured !== false;
+  const isConfigured = Boolean(status?.is_configured);
 
   const [isDraggingOver, setIsDraggingOver] = useState(false);
   const [transferStatus, setTransferStatus] = useState<{ active: boolean; message: string; type: 'info' | 'success' | 'error' } | null>(null);
@@ -213,7 +213,7 @@ export function App() {
     >
       {/* PC Setup Wizard for Fresh Install / Unconfigured Server */}
       {isOnline && !isConfigured && (
-        <SetupWizard defaultName={status?.name} onComplete={fetchAllData} />
+        <SetupWizard onComplete={fetchAllData} />
       )}
 
       {/* Frameless Glassmorphic Title Bar with Live Update Pill */}

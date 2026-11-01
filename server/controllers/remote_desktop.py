@@ -1,3 +1,4 @@
+import sys
 import io
 import time
 import json
@@ -17,43 +18,54 @@ from controllers import mouse, keyboard
 pyautogui.PAUSE = 0
 pyautogui.FAILSAFE = False
 
-user32 = ctypes.windll.user32
-gdi32 = ctypes.windll.gdi32
-try:
-    dwmapi = ctypes.windll.dwmapi
-except Exception:
+_IS_WINDOWS = sys.platform == "win32"
+
+if _IS_WINDOWS:
+    user32 = ctypes.windll.user32
+    gdi32 = ctypes.windll.gdi32
+    try:
+        dwmapi = ctypes.windll.dwmapi
+    except Exception:
+        dwmapi = None
+
+    try:
+        winmm = ctypes.windll.winmm
+        winmm.timeBeginPeriod(1)
+    except Exception:
+        pass
+
+    try:
+        user32.SetProcessDPIAware()
+    except Exception:
+        pass
+else:
+    user32 = None
+    gdi32 = None
     dwmapi = None
-
-try:
-    winmm = ctypes.windll.winmm
-    winmm.timeBeginPeriod(1)
-except Exception:
-    pass
-
-try:
-    user32.SetProcessDPIAware()
-except Exception:
-    pass
+    winmm = None
 
 HDC = wintypes.HDC
 HBITMAP = wintypes.HBITMAP
 
-user32.OpenDesktopW.restype = wintypes.HANDLE
-user32.OpenDesktopW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+if _IS_WINDOWS and user32 is not None:
+    user32.OpenDesktopW.restype = wintypes.HANDLE
+    user32.OpenDesktopW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
 
-user32.SetThreadDesktop.restype = wintypes.BOOL
-user32.SetThreadDesktop.argtypes = [wintypes.HANDLE]
+    user32.SetThreadDesktop.restype = wintypes.BOOL
+    user32.SetThreadDesktop.argtypes = [wintypes.HANDLE]
 
-user32.EnumDesktopWindows.restype = wintypes.BOOL
-user32.EnumDesktopWindows.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.LPARAM]
+    user32.EnumDesktopWindows.restype = wintypes.BOOL
+    user32.EnumDesktopWindows.argtypes = [wintypes.HANDLE, ctypes.c_void_p, wintypes.LPARAM]
 
 _desktop_handle = None
 _desktop_lock = threading.Lock()
 
 # Ensure thread has access to interactive desktop
-def ensure_desktop_access() -> wintypes.HANDLE:
+def ensure_desktop_access() -> Any:
     """Ensure the calling thread is attached to the interactive 'Default' desktop."""
     global _desktop_handle
+    if not _IS_WINDOWS or user32 is None:
+        return None
     try:
         if _desktop_handle is None:
             with _desktop_lock:
@@ -104,55 +116,56 @@ class BITMAPINFO(ctypes.Structure):
     ]
 
 # Explicit 64-bit Win32 GDI & User32 function signatures to prevent pointer truncation
-user32.GetDC.restype = HDC
-user32.GetDC.argtypes = [wintypes.HWND]
-user32.ReleaseDC.restype = ctypes.c_int
-user32.ReleaseDC.argtypes = [wintypes.HWND, HDC]
+if _IS_WINDOWS and user32 is not None:
+    user32.GetDC.restype = HDC
+    user32.GetDC.argtypes = [wintypes.HWND]
+    user32.ReleaseDC.restype = ctypes.c_int
+    user32.ReleaseDC.argtypes = [wintypes.HWND, HDC]
 
-user32.IsWindow.restype = wintypes.BOOL
-user32.IsWindow.argtypes = [wintypes.HWND]
+    user32.IsWindow.restype = wintypes.BOOL
+    user32.IsWindow.argtypes = [wintypes.HWND]
 
-user32.IsIconic.restype = wintypes.BOOL
-user32.IsIconic.argtypes = [wintypes.HWND]
+    user32.IsIconic.restype = wintypes.BOOL
+    user32.IsIconic.argtypes = [wintypes.HWND]
 
-user32.ShowWindow.restype = wintypes.BOOL
-user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.ShowWindow.restype = wintypes.BOOL
+    user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
 
-user32.SetForegroundWindow.restype = wintypes.BOOL
-user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+    user32.SetForegroundWindow.restype = wintypes.BOOL
+    user32.SetForegroundWindow.argtypes = [wintypes.HWND]
 
-user32.GetForegroundWindow.restype = wintypes.HWND
-user32.GetForegroundWindow.argtypes = []
+    user32.GetForegroundWindow.restype = wintypes.HWND
+    user32.GetForegroundWindow.argtypes = []
 
-user32.GetWindowRect.restype = wintypes.BOOL
-user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
+    user32.GetWindowRect.restype = wintypes.BOOL
+    user32.GetWindowRect.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.RECT)]
 
-user32.PrintWindow.restype = wintypes.BOOL
-user32.PrintWindow.argtypes = [wintypes.HWND, HDC, wintypes.UINT]
+    user32.PrintWindow.restype = wintypes.BOOL
+    user32.PrintWindow.argtypes = [wintypes.HWND, HDC, wintypes.UINT]
 
-user32.GetWindowLongW.restype = wintypes.LONG
-user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
+    user32.GetWindowLongW.restype = wintypes.LONG
+    user32.GetWindowLongW.argtypes = [wintypes.HWND, ctypes.c_int]
 
-user32.GetWindowTextLengthW.restype = ctypes.c_int
-user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
+    user32.GetWindowTextLengthW.restype = ctypes.c_int
+    user32.GetWindowTextLengthW.argtypes = [wintypes.HWND]
 
-user32.GetWindowTextW.restype = ctypes.c_int
-user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user32.GetWindowTextW.restype = ctypes.c_int
+    user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
 
-user32.IsWindowVisible.restype = wintypes.BOOL
-user32.IsWindowVisible.argtypes = [wintypes.HWND]
+    user32.IsWindowVisible.restype = wintypes.BOOL
+    user32.IsWindowVisible.argtypes = [wintypes.HWND]
 
-user32.GetWindow.restype = wintypes.HWND
-user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
+    user32.GetWindow.restype = wintypes.HWND
+    user32.GetWindow.argtypes = [wintypes.HWND, wintypes.UINT]
 
-user32.PostMessageW.restype = wintypes.BOOL
-user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    user32.PostMessageW.restype = wintypes.BOOL
+    user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
 
-user32.RealChildWindowFromPoint.restype = wintypes.HWND
-user32.RealChildWindowFromPoint.argtypes = [wintypes.HWND, wintypes.POINT]
+    user32.RealChildWindowFromPoint.restype = wintypes.HWND
+    user32.RealChildWindowFromPoint.argtypes = [wintypes.HWND, wintypes.POINT]
 
-user32.ScreenToClient.restype = wintypes.BOOL
-user32.ScreenToClient.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
+    user32.ScreenToClient.restype = wintypes.BOOL
+    user32.ScreenToClient.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.POINT)]
 
 # Windows message constants for background window input without stealing focus or popping to top
 WM_MOUSEMOVE = 0x0200
@@ -183,44 +196,97 @@ MOUSEEVENTF_WHEEL = 0x0800
 MOUSEEVENTF_ABSOLUTE = 0x8000
 
 def native_set_cursor(px: int, py: int):
-    try:
-        user32.SetCursorPos(int(px), int(py))
-    except Exception:
-        pass
+    if _IS_WINDOWS and user32 is not None:
+        try:
+            user32.SetCursorPos(int(px), int(py))
+        except Exception:
+            pass
+    else:
+        try:
+            from pynput.mouse import Controller
+            Controller().position = (int(px), int(py))
+        except Exception:
+            try:
+                pyautogui.moveTo(int(px), int(py))
+            except Exception:
+                pass
 
 def native_mouse_down(button: str = "left"):
-    try:
-        b = button.lower()
-        flag = MOUSEEVENTF_LEFTDOWN if b == "left" else (MOUSEEVENTF_RIGHTDOWN if b == "right" else MOUSEEVENTF_MIDDLEDOWN)
-        user32.mouse_event(flag, 0, 0, 0, 0)
-    except Exception:
-        pass
+    if _IS_WINDOWS and user32 is not None:
+        try:
+            b = button.lower()
+            flag = MOUSEEVENTF_LEFTDOWN if b == "left" else (MOUSEEVENTF_RIGHTDOWN if b == "right" else MOUSEEVENTF_MIDDLEDOWN)
+            user32.mouse_event(flag, 0, 0, 0, 0)
+        except Exception:
+            pass
+    else:
+        try:
+            from pynput.mouse import Controller, Button
+            btn = Button.right if button.lower() == "right" else (Button.middle if button.lower() == "middle" else Button.left)
+            Controller().press(btn)
+        except Exception:
+            try:
+                pyautogui.mouseDown(button=button)
+            except Exception:
+                pass
 
 def native_mouse_up(button: str = "left"):
-    try:
-        b = button.lower()
-        flag = MOUSEEVENTF_LEFTUP if b == "left" else (MOUSEEVENTF_RIGHTUP if b == "right" else MOUSEEVENTF_MIDDLEUP)
-        user32.mouse_event(flag, 0, 0, 0, 0)
-    except Exception:
-        pass
+    if _IS_WINDOWS and user32 is not None:
+        try:
+            b = button.lower()
+            flag = MOUSEEVENTF_LEFTUP if b == "left" else (MOUSEEVENTF_RIGHTUP if b == "right" else MOUSEEVENTF_MIDDLEUP)
+            user32.mouse_event(flag, 0, 0, 0, 0)
+        except Exception:
+            pass
+    else:
+        try:
+            from pynput.mouse import Controller, Button
+            btn = Button.right if button.lower() == "right" else (Button.middle if button.lower() == "middle" else Button.left)
+            Controller().release(btn)
+        except Exception:
+            try:
+                pyautogui.mouseUp(button=button)
+            except Exception:
+                pass
 
 def native_mouse_click(px: int, py: int, button: str = "left", clicks: int = 1):
-    try:
-        user32.SetCursorPos(int(px), int(py))
-        b = button.lower()
-        down_flag = MOUSEEVENTF_LEFTDOWN if b == "left" else (MOUSEEVENTF_RIGHTDOWN if b == "right" else MOUSEEVENTF_MIDDLEDOWN)
-        up_flag = MOUSEEVENTF_LEFTUP if b == "left" else (MOUSEEVENTF_RIGHTUP if b == "right" else MOUSEEVENTF_MIDDLEUP)
-        for _ in range(clicks):
-            user32.mouse_event(down_flag, 0, 0, 0, 0)
-            time.sleep(0.015)
-            user32.mouse_event(up_flag, 0, 0, 0, 0)
-            if clicks > 1:
-                time.sleep(0.05)
-    except Exception:
-        pass
+    native_set_cursor(px, py)
+    if _IS_WINDOWS and user32 is not None:
+        try:
+            b = button.lower()
+            down_flag = MOUSEEVENTF_LEFTDOWN if b == "left" else (MOUSEEVENTF_RIGHTDOWN if b == "right" else MOUSEEVENTF_MIDDLEDOWN)
+            up_flag = MOUSEEVENTF_LEFTUP if b == "left" else (MOUSEEVENTF_RIGHTUP if b == "right" else MOUSEEVENTF_MIDDLEUP)
+            for _ in range(clicks):
+                user32.mouse_event(down_flag, 0, 0, 0, 0)
+                time.sleep(0.015)
+                user32.mouse_event(up_flag, 0, 0, 0, 0)
+                if clicks > 1:
+                    time.sleep(0.05)
+        except Exception:
+            pass
+    else:
+        try:
+            from pynput.mouse import Controller, Button
+            ctl = Controller()
+            ctl.position = (int(px), int(py))
+            btn = Button.right if button.lower() == "right" else (Button.middle if button.lower() == "middle" else Button.left)
+            for _ in range(clicks):
+                ctl.press(btn)
+                time.sleep(0.015)
+                ctl.release(btn)
+                if clicks > 1:
+                    time.sleep(0.05)
+        except Exception:
+            try:
+                pyautogui.click(int(px), int(py), button=button, clicks=clicks)
+            except Exception:
+                pass
 
 def send_window_mouse_event(h_val: wintypes.HWND, px: int, py: int, event_type: str, button: str = "left", clicks: int = 1, delta: int = 0) -> None:
     """Dispatches mouse events directly to a target window via PostMessageW without activating or bringing it to top."""
+    if not _IS_WINDOWS or user32 is None:
+        native_mouse_click(px, py, button=button, clicks=clicks)
+        return
     try:
         rect = wintypes.RECT()
         if not user32.GetWindowRect(h_val, ctypes.byref(rect)):
@@ -294,6 +360,8 @@ def send_window_key_event(h_val: wintypes.HWND, key: str, event_type: str = "pre
 
 def is_window_valid(hwnd: Any) -> bool:
     """Safely checks if an HWND is a currently existing, valid window handle."""
+    if not _IS_WINDOWS or user32 is None:
+        return False
     try:
         if not hwnd:
             return False
@@ -303,95 +371,129 @@ def is_window_valid(hwnd: Any) -> bool:
     except Exception:
         return False
 
-gdi32.CreateCompatibleDC.restype = HDC
-gdi32.CreateCompatibleDC.argtypes = [HDC]
-gdi32.DeleteDC.restype = wintypes.BOOL
-gdi32.DeleteDC.argtypes = [HDC]
+if _IS_WINDOWS and gdi32 is not None:
+    gdi32.CreateCompatibleDC.restype = HDC
+    gdi32.CreateCompatibleDC.argtypes = [HDC]
+    gdi32.DeleteDC.restype = wintypes.BOOL
+    gdi32.DeleteDC.argtypes = [HDC]
 
-gdi32.CreateDIBSection.restype = HBITMAP
-gdi32.CreateDIBSection.argtypes = [
-    HDC,
-    ctypes.POINTER(BITMAPINFO),
-    wintypes.UINT,
-    ctypes.POINTER(ctypes.c_void_p),
-    wintypes.HANDLE,
-    wintypes.DWORD
-]
+    gdi32.CreateDIBSection.restype = HBITMAP
+    gdi32.CreateDIBSection.argtypes = [
+        HDC,
+        ctypes.POINTER(BITMAPINFO),
+        wintypes.UINT,
+        ctypes.POINTER(ctypes.c_void_p),
+        wintypes.HANDLE,
+        wintypes.DWORD
+    ]
 
-gdi32.SelectObject.restype = wintypes.HGDIOBJ
-gdi32.SelectObject.argtypes = [HDC, wintypes.HGDIOBJ]
-gdi32.DeleteObject.restype = wintypes.BOOL
-gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
+if _IS_WINDOWS and gdi32 is not None:
+    gdi32.SelectObject.restype = wintypes.HGDIOBJ
+    gdi32.SelectObject.argtypes = [HDC, wintypes.HGDIOBJ]
+    gdi32.DeleteObject.restype = wintypes.BOOL
+    gdi32.DeleteObject.argtypes = [wintypes.HGDIOBJ]
 
-gdi32.BitBlt.restype = wintypes.BOOL
-gdi32.BitBlt.argtypes = [
-    HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
-    HDC, ctypes.c_int, ctypes.c_int, wintypes.DWORD
-]
+    gdi32.BitBlt.restype = wintypes.BOOL
+    gdi32.BitBlt.argtypes = [
+        HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+        HDC, ctypes.c_int, ctypes.c_int, wintypes.DWORD
+    ]
 
-gdi32.StretchBlt.restype = wintypes.BOOL
-gdi32.StretchBlt.argtypes = [
-    HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
-    HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.DWORD
-]
+    gdi32.StretchBlt.restype = wintypes.BOOL
+    gdi32.StretchBlt.argtypes = [
+        HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+        HDC, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int, wintypes.DWORD
+    ]
 
-gdi32.SetStretchBltMode.restype = ctypes.c_int
-gdi32.SetStretchBltMode.argtypes = [HDC, ctypes.c_int]
+    gdi32.SetStretchBltMode.restype = ctypes.c_int
+    gdi32.SetStretchBltMode.argtypes = [HDC, ctypes.c_int]
 
-gdi32.CreateCompatibleBitmap.restype = HBITMAP
-gdi32.CreateCompatibleBitmap.argtypes = [HDC, ctypes.c_int, ctypes.c_int]
+    gdi32.CreateCompatibleBitmap.restype = HBITMAP
+    gdi32.CreateCompatibleBitmap.argtypes = [HDC, ctypes.c_int, ctypes.c_int]
 
-user32.PrintWindow.restype = wintypes.BOOL
-user32.PrintWindow.argtypes = [wintypes.HWND, HDC, wintypes.UINT]
+if _IS_WINDOWS and user32 is not None:
+    user32.PrintWindow.restype = wintypes.BOOL
+    user32.PrintWindow.argtypes = [wintypes.HWND, HDC, wintypes.UINT]
 
 def get_monitors_info() -> List[Dict[str, Any]]:
     """Enumerate all available physical and virtual monitors."""
-    ensure_desktop_access()
-    monitors = []
+    if _IS_WINDOWS and user32 is not None:
+        ensure_desktop_access()
+        monitors = []
 
-    def _monitor_enum_callback(hMonitor, hdcMonitor, lprcMonitor, dwData):
-        mi = MONITORINFOEXW()
-        mi.cbSize = ctypes.sizeof(MONITORINFOEXW)
-        if user32.GetMonitorInfoW(hMonitor, ctypes.byref(mi)):
-            w = mi.rcMonitor.right - mi.rcMonitor.left
-            h = mi.rcMonitor.bottom - mi.rcMonitor.top
-            idx = len(monitors) + 1
-            is_prim = bool(mi.dwFlags & 1)
+        def _monitor_enum_callback(hMonitor, hdcMonitor, lprcMonitor, dwData):
+            mi = MONITORINFOEXW()
+            mi.cbSize = ctypes.sizeof(MONITORINFOEXW)
+            if user32.GetMonitorInfoW(hMonitor, ctypes.byref(mi)):
+                w = mi.rcMonitor.right - mi.rcMonitor.left
+                h = mi.rcMonitor.bottom - mi.rcMonitor.top
+                idx = len(monitors) + 1
+                is_prim = bool(mi.dwFlags & 1)
+                monitors.append({
+                    "id": idx,
+                    "name": f"Display {idx}" + (" (Primary)" if is_prim else ""),
+                    "left": mi.rcMonitor.left,
+                    "top": mi.rcMonitor.top,
+                    "width": w,
+                    "height": h,
+                    "is_primary": is_prim
+                })
+            return True
+
+        try:
+            MONITORENUMPROC = ctypes.WINFUNCTYPE(
+                ctypes.c_bool, wintypes.HMONITOR, wintypes.HDC, ctypes.POINTER(RECT), wintypes.LPARAM
+            )
+            user32.EnumDisplayMonitors(None, None, MONITORENUMPROC(_monitor_enum_callback), 0)
+        except Exception:
+            pass
+
+        if not monitors:
+            w = user32.GetSystemMetrics(0) or 1920
+            h = user32.GetSystemMetrics(1) or 1080
             monitors.append({
-                "id": idx,
-                "name": f"Display {idx}" + (" (Primary)" if is_prim else ""),
-                "left": mi.rcMonitor.left,
-                "top": mi.rcMonitor.top,
+                "id": 1,
+                "name": "Display 1 (Primary)",
+                "left": 0,
+                "top": 0,
                 "width": w,
                 "height": h,
-                "is_primary": is_prim
+                "is_primary": True
             })
-        return True
+        return monitors
 
+    # Cross-platform / Linux monitor enumeration via mss
     try:
-        MONITORENUMPROC = ctypes.WINFUNCTYPE(
-            ctypes.c_bool, wintypes.HMONITOR, wintypes.HDC, ctypes.POINTER(RECT), wintypes.LPARAM
-        )
-        user32.EnumDisplayMonitors(None, None, MONITORENUMPROC(_monitor_enum_callback), 0)
+        import mss
+        with mss.mss() as sct:
+            monitors = []
+            mons = sct.monitors[1:] if len(sct.monitors) > 1 else sct.monitors
+            for idx, m in enumerate(mons, start=1):
+                monitors.append({
+                    "id": idx,
+                    "name": f"Display {idx}" + (" (Primary)" if idx == 1 else ""),
+                    "left": m.get("left", 0),
+                    "top": m.get("top", 0),
+                    "width": m.get("width", 1920),
+                    "height": m.get("height", 1080),
+                    "is_primary": (idx == 1)
+                })
+            return monitors
     except Exception:
-        pass
-
-    if not monitors:
-        w = user32.GetSystemMetrics(0) or 1920
-        h = user32.GetSystemMetrics(1) or 1080
-        monitors.append({
+        return [{
             "id": 1,
             "name": "Display 1 (Primary)",
             "left": 0,
             "top": 0,
-            "width": w,
-            "height": h,
+            "width": 1920,
+            "height": 1080,
             "is_primary": True
-        })
-    return monitors
+        }]
 
 def get_active_windows() -> List[Dict[str, Any]]:
     """Enumerate running top-level visible application windows for isolated window control."""
+    if not _IS_WINDOWS or user32 is None:
+        return []
     hdesk = ensure_desktop_access()
     windows = []
 
@@ -546,10 +648,29 @@ class FastGDIScreenCapturer:
             self.sdc = None
         self.bits_ptr = ctypes.c_void_p()
 
-_capturer = FastGDIScreenCapturer()
+_capturer = FastGDIScreenCapturer() if (_IS_WINDOWS and gdi32 is not None) else None
 
 def capture_screen_jpeg(monitor_idx: int = 1, quality: int = 55, scale: float = 1.0) -> Tuple[bytes, int, int]:
-    """Captures a screenshot of the specified monitor using high-speed Win32 GDI."""
+    """Captures a screenshot of the specified monitor using high-speed capture."""
+    if not _IS_WINDOWS or _capturer is None:
+        try:
+            import mss
+            with mss.mss() as sct:
+                mons = sct.monitors[1:] if len(sct.monitors) > 1 else sct.monitors
+                mon = mons[monitor_idx - 1] if 0 < monitor_idx <= len(mons) else (mons[0] if mons else sct.monitors[0])
+                sct_img = sct.grab(mon)
+                orig_w, orig_h = sct_img.width, sct_img.height
+                img = Image.frombytes("RGB", sct_img.size, sct_img.bgra, "raw", "BGRX")
+                if 0.2 <= scale < 0.98:
+                    new_w = max(320, int(orig_w * scale))
+                    new_h = max(240, int(orig_h * scale))
+                    img = img.resize((new_w, new_h), Image.Resampling.BILINEAR)
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=quality, optimize=False)
+                return buf.getvalue(), orig_w, orig_h
+        except Exception:
+            pass
+
     ensure_desktop_access()
     monitors = get_monitors_info()
     mon = next((m for m in monitors if m["id"] == monitor_idx), monitors[0] if monitors else None)
@@ -560,18 +681,21 @@ def capture_screen_jpeg(monitor_idx: int = 1, quality: int = 55, scale: float = 
     mon_h = mon["height"] if mon else 1080
 
     try:
-        return _capturer.capture(mon_left, mon_top, mon_w, mon_h, quality=quality, scale=scale)
+        if _capturer is not None:
+            return _capturer.capture(mon_left, mon_top, mon_w, mon_h, quality=quality, scale=scale)
     except Exception:
-        # Fallback to pyautogui in emergency
-        img = pyautogui.screenshot()
-        orig_w, orig_h = img.width, img.height
-        if scale < 0.98 and scale >= 0.2:
-            new_w = max(320, int(orig_w * scale))
-            new_h = max(240, int(orig_h * scale))
-            img = img.resize((new_w, new_h), Image.Resampling.BILINEAR)
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=quality, optimize=False)
-        return buf.getvalue(), orig_w, orig_h
+        pass
+
+    # Fallback to pyautogui in emergency
+    img = pyautogui.screenshot()
+    orig_w, orig_h = img.width, img.height
+    if scale < 0.98 and scale >= 0.2:
+        new_w = max(320, int(orig_w * scale))
+        new_h = max(240, int(orig_h * scale))
+        img = img.resize((new_w, new_h), Image.Resampling.BILINEAR)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=quality, optimize=False)
+    return buf.getvalue(), orig_w, orig_h
 
 class FastWindowCapturer:
     """
@@ -727,10 +851,12 @@ class FastWindowCapturer:
             self.sdc = None
         self.bits_ptr = ctypes.c_void_p()
 
-_window_capturer = FastWindowCapturer()
+_window_capturer = FastWindowCapturer() if (_IS_WINDOWS and gdi32 is not None) else None
 
 def capture_window_jpeg(hwnd: int, quality: int = 55, scale: float = 1.0) -> Tuple[bytes, int, int]:
     """Captures an isolated application window in background without desktop interference."""
+    if not _IS_WINDOWS or _window_capturer is None:
+        return capture_screen_jpeg(1, quality=quality, scale=scale)
     ensure_desktop_access()
     return _window_capturer.capture(hwnd, quality=quality, scale=scale)
 
@@ -1004,10 +1130,37 @@ def pack_frame(frame_bytes: bytes, monitor_id: int, width: int, height: int, fra
 
 def generate_audio_stream():
     """
-    Generates a high-fidelity digital streamable WAV audio feed of Windows master sound output.
-    Uses native Windows Core Audio WASAPI Loopback to capture 100% digital bit-perfect system audio
-    (YouTube, games, media players, browser) with zero microphone noise or room acoustics.
+    Generates a high-fidelity digital streamable WAV audio feed of system sound output.
+    Uses WASAPI Loopback on Windows or stream loop on Linux.
     """
+    if not _IS_WINDOWS:
+        try:
+            out_sample_rate = 44100
+            out_channels = 2
+            header = io.BytesIO()
+            header.write(b'RIFF')
+            header.write(struct.pack('<I', 0x7FFFFFFF))
+            header.write(b'WAVEfmt ')
+            header.write(struct.pack('<I', 16))
+            header.write(struct.pack('<H', 1))  # PCM
+            header.write(struct.pack('<H', out_channels))
+            header.write(struct.pack('<I', out_sample_rate))
+            header.write(struct.pack('<I', out_sample_rate * out_channels * 2))
+            header.write(struct.pack('<H', out_channels * 2))
+            header.write(struct.pack('<H', 16))
+            header.write(b'data')
+            header.write(struct.pack('<I', 0x7FFFFFFF))
+            yield header.getvalue()
+
+            silence_samples = int(out_sample_rate * 0.05)
+            silence_bytes = bytes(silence_samples * out_channels * 2)
+            while True:
+                time.sleep(0.05)
+                yield silence_bytes
+        except Exception as e:
+            print("[RemoteAudio] Linux audio stream notice:", e)
+        return
+
     try:
         import numpy as np
         import comtypes

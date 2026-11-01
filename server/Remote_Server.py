@@ -16,8 +16,6 @@ import uuid
 import psutil
 import ctypes
 from ctypes import wintypes
-import tkinter as tk
-from tkinter import messagebox
 import traceback
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
@@ -151,8 +149,8 @@ def save_config(data: dict) -> None:
     try:
         public_cfg = {
             '_security': 'Windows-DPAPI-Encrypted',
-            'name': data.get('name', get_default_pc_name()),
-            'is_configured': bool(data.get('is_configured', True)),
+            'name': data.get('name', ''),
+            'is_configured': bool(data.get('is_configured', False)),
             'strict_auto_connect': bool(data.get('strict_auto_connect', True))
         }
         sensitive_data = {
@@ -217,14 +215,22 @@ def load_config():
             data = json.load(file)
 
         if 'encrypted_vault' in data:
-            enc_bytes = base64.b64decode(data['encrypted_vault'])
-            dec_bytes = dpapi_decrypt(enc_bytes)
-            if dec_bytes:
-                vault = json.loads(dec_bytes.decode('utf-8'))
-                data.update(vault)
-                data.pop('encrypted_vault', None)
-            else:
-                log_server_event("DPAPI vault decryption error; running in restricted mode", "ERROR")
+            try:
+                enc_bytes = base64.b64decode(data['encrypted_vault'])
+                dec_bytes = dpapi_decrypt(enc_bytes)
+                if dec_bytes:
+                    try:
+                        vault = json.loads(dec_bytes.decode('utf-8'))
+                        data.update(vault)
+                        data.pop('encrypted_vault', None)
+                    except (UnicodeDecodeError, json.JSONDecodeError):
+                        log_server_event("Windows DPAPI vault detected on Linux; initializing fresh local configuration", "INFO")
+                        data.pop('encrypted_vault', None)
+                        data['is_configured'] = False
+                else:
+                    log_server_event("DPAPI vault decryption error; running in restricted mode", "ERROR")
+            except Exception as e:
+                log_server_event(f"Vault processing notice: {e}", "WARN")
 
         if 'password' in data:
             data = migrate_plaintext_password(data)
@@ -250,11 +256,12 @@ def setup_config():
             config['trusted_devices'] = []
         if 'strict_auto_connect' not in config:
             config['strict_auto_connect'] = True
+        if 'is_configured' not in config:
+            config['is_configured'] = False
         return config
 
-    default_name = get_default_pc_name()
     default_config = {
-        'name': default_name,
+        'name': '',
         'is_configured': False,
         'strict_auto_connect': True,
         'trusted_tokens': {},
@@ -266,7 +273,7 @@ def setup_config():
 
 setup_crash_logging()
 CONFIG = setup_config()
-SERVER_NAME = CONFIG['name']
+SERVER_NAME = CONFIG.get('name', '')
 
 HTML = """
 <!doctype html>
@@ -469,7 +476,7 @@ def check_auth(supplied_password: str | None, x_device_token: str | None = None,
             if d.get('token') == x_device_token:
                 return True
 
-    if not CONFIG.get('is_configured', True):
+    if not CONFIG.get('is_configured', False):
         return True
 
     if isinstance(supplied_password, str) and supplied_password:
@@ -587,7 +594,7 @@ def get_status() -> dict:
         'connected_clients': active_cnt,
         'clients': list(CONNECTED_CLIENTS.values()),
         'paired_devices_count': len(CONFIG.get('trusted_devices', [])),
-        'is_configured': bool(CONFIG.get('is_configured', True)),
+        'is_configured': bool(CONFIG.get('is_configured', False)),
         'strict_auto_connect': bool(CONFIG.get('strict_auto_connect', True))
     }
 
@@ -1451,9 +1458,18 @@ def shutdown_server() -> dict:
 @app.api_route('/gui/show', methods=['GET', 'POST'])
 def show_gui_window() -> dict:
     candidates = [
+        # Windows GUI binaries
         os.path.join(BASE_DIR, 'desktop-gui', 'dist-electron', 'win-unpacked', 'Remote PC GUI.exe'),
         os.path.join(BASE_DIR, 'Remote PC GUI.exe'),
         os.path.join(BASE_DIR, 'desktop-gui', 'dist-electron', 'Remote PC GUI Setup 0.0.0.exe'),
+        # Linux GUI binaries
+        os.path.join(BASE_DIR, 'desktop-gui', 'dist-electron', 'linux-unpacked', 'Remote PC GUI'),
+        os.path.join(BASE_DIR, 'desktop-gui', 'dist-electron', 'linux-unpacked', 'desktop-gui'),
+        os.path.join(BASE_DIR, 'Remote PC GUI.AppImage'),
+        os.path.join(BASE_DIR, 'Remote_PC_GUI'),
+        os.path.join(os.path.dirname(BASE_DIR), 'desktop-gui', 'dist-electron', 'linux-unpacked', 'Remote PC GUI'),
+        os.path.join(os.path.dirname(BASE_DIR), 'desktop-gui', 'dist-electron', 'linux-unpacked', 'desktop-gui'),
+        os.path.join(os.path.dirname(BASE_DIR), 'Remote PC GUI.AppImage'),
     ]
     for exe in candidates:
         if os.path.exists(exe):
@@ -1672,15 +1688,12 @@ def _auto_forward_adb():
         return
     _LAST_ADB_FORWARD_TIME = now
     try:
-        creation_flags = 0
+        kwargs = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "timeout": 1.0}
         if sys.platform == 'win32':
-            creation_flags = subprocess.CREATE_NO_WINDOW
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
         subprocess.run(
             ["adb", "forward", "tcp:15056", "tcp:5056"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            timeout=1.0,
-            creationflags=creation_flags
+            **kwargs
         )
     except Exception:
         pass

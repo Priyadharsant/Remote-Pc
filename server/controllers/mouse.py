@@ -2,9 +2,10 @@ import threading
 import pyautogui
 
 try:
-    from pynput.mouse import Controller as PynputMouseController
+    from pynput.mouse import Controller as PynputMouseController, Button
 except ImportError:
     PynputMouseController = None
+    Button = None
 
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0
@@ -41,40 +42,84 @@ def move_cursor(dx: float, dy: float, sensitivity: float = 1.8) -> None:
 
 def left_click() -> None:
     with _mouse_lock:
-        pyautogui.click()
+        if _pynput_mouse is not None and Button is not None:
+            _pynput_mouse.click(Button.left)
+        else:
+            try:
+                pyautogui.click()
+            except Exception:
+                pass
 
 def double_click() -> None:
     with _mouse_lock:
-        pyautogui.doubleClick()
+        if _pynput_mouse is not None and Button is not None:
+            _pynput_mouse.click(Button.left, 2)
+        else:
+            try:
+                pyautogui.doubleClick()
+            except Exception:
+                pass
 
 def right_click() -> None:
     with _mouse_lock:
-        pyautogui.click(button='right')
+        if _pynput_mouse is not None and Button is not None:
+            _pynput_mouse.click(Button.right)
+        else:
+            try:
+                pyautogui.click(button='right')
+            except Exception:
+                pass
 
 def drag_start() -> None:
     with _mouse_lock:
-        pyautogui.mouseDown()
+        if _pynput_mouse is not None and Button is not None:
+            _pynput_mouse.press(Button.left)
+        else:
+            try:
+                pyautogui.mouseDown()
+            except Exception:
+                pass
 
 def drag_move(dx: float, dy: float, sensitivity: float = 1.4) -> None:
     move_cursor(dx, dy, sensitivity)
 
 def drag_end() -> None:
     with _mouse_lock:
-        pyautogui.mouseUp()
+        if _pynput_mouse is not None and Button is not None:
+            _pynput_mouse.release(Button.left)
+        else:
+            try:
+                pyautogui.mouseUp()
+            except Exception:
+                pass
 
 def scroll_vertical(delta: float) -> None:
     amount = int(round(_clamp(delta * _SCROLL_STEP, -240, 240)))
     if amount == 0:
         return
     with _mouse_lock:
-        pyautogui.scroll(amount)
+        if _pynput_mouse is not None:
+            steps = max(-5, min(5, int(round(delta * 2)))) or (1 if delta > 0 else -1)
+            _pynput_mouse.scroll(0, steps)
+        else:
+            try:
+                pyautogui.scroll(amount)
+            except Exception:
+                pass
 
 def scroll_horizontal(delta: float) -> None:
     amount = int(round(_clamp(delta * _SCROLL_STEP, -240, 240)))
     if amount == 0:
         return
     with _mouse_lock:
-        pyautogui.hscroll(amount)
+        if _pynput_mouse is not None:
+            steps = max(-5, min(5, int(round(delta * 2)))) or (1 if delta > 0 else -1)
+            _pynput_mouse.scroll(steps, 0)
+        else:
+            try:
+                pyautogui.hscroll(amount)
+            except Exception:
+                pass
 
 def zoom(delta: float) -> None:
     if abs(delta) < _ZOOM_THRESHOLD:

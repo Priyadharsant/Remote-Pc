@@ -24,6 +24,11 @@
 *.mp4
 *.mov
 *.avi
+*.deb
+*.rpm
+*.AppImage
+Remote_Server
+Remote_PC_GUI
 Remote PC.apk
 Remote_PC_Setup.exe
 Remote_Server.exe

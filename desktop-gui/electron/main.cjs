@@ -6,10 +6,38 @@ const http = require('http');
 const fs = require('fs');
 const { spawn, exec } = require('child_process');
 
+if (process.platform === 'linux') {
+  app.commandLine.appendSwitch('no-sandbox');
+  app.commandLine.appendSwitch('disable-gpu-sandbox');
+}
+
 let mainWindow = null;
 let tray = null;
 
 const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
+
+function getAppIconPath() {
+  const isWin = process.platform === 'win32';
+  const iconExt = isWin ? '.ico' : '.png';
+  const candidates = [
+    path.join(__dirname, `../dist/logo${iconExt}`),
+    path.join(__dirname, `../public/logo${iconExt}`),
+    path.join(__dirname, `../../server/logo${iconExt}`),
+    path.join(process.resourcesPath, `server/logo${iconExt}`),
+    path.join(process.resourcesPath, `logo${iconExt}`),
+    path.join(process.cwd(), `server/logo${iconExt}`),
+    path.join(process.cwd(), `logo${iconExt}`),
+    path.join(__dirname, `../../logo${iconExt}`),
+    path.join(__dirname, '../../server/logo.png'),
+    path.join(__dirname, '../../server/logo.ico'),
+  ];
+  for (const c of candidates) {
+    try {
+      if (fs.existsSync(c)) return c;
+    } catch (_) {}
+  }
+  return null;
+}
 
 // ==========================================
 // Multi-Stream High-Speed Range Downloader
@@ -267,6 +295,8 @@ async function downloadFile(url, destPath, onProgress) {
 }
 
 function createWindow() {
+  const iconPath = getAppIconPath();
+
   mainWindow = new BrowserWindow({
     width: 1060,
     height: 740,
@@ -274,6 +304,7 @@ function createWindow() {
     minHeight: 620,
     frame: false,
     backgroundColor: '#0B0F19',
+    icon: iconPath || undefined,
     show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
@@ -302,7 +333,11 @@ function createWindow() {
 }
 
 function createTray() {
-  const iconPath = path.join(__dirname, '../../server/logo.ico');
+  const iconPath = getAppIconPath();
+  if (!iconPath) {
+    console.warn('Tray icon not found, skipping tray creation');
+    return;
+  }
   try {
     tray = new Tray(iconPath);
   } catch (e) {
@@ -544,28 +579,39 @@ ipcMain.handle('download-and-install-update', async (event, { url, version }) =>
       throw new Error('Downloaded installer file is empty');
     }
 
-    console.log(`[AutoUpdater] Download completed (${(stats.size / (1024 * 1024)).toFixed(1)} MB). Launching Inno Setup...`);
+    console.log(`[AutoUpdater] Download completed (${(stats.size / (1024 * 1024)).toFixed(1)} MB). Launching installer...`);
 
-    // Launch Inno Setup installer (/SILENT /FORCECLOSEAPPLICATIONS /CLOSEAPPLICATIONS) so user doesn't need to manually click Next, Next
-    const updaterScript = path.join(tempDir, `remotepc_update_${Date.now()}.bat`);
-    const scriptContent = [
-      `@echo off`,
-      `taskkill /F /IM "Remote_Server.exe" /T >nul 2>&1`,
-      `taskkill /F /IM "Remote PC GUI.exe" /T >nul 2>&1`,
-      `taskkill /F /IM "electron.exe" /T >nul 2>&1`,
-      `timeout /t 1 /nobreak >nul`,
-      `start "" "${destPath}" /SILENT /FORCECLOSEAPPLICATIONS /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS=no`,
-      `del "%~f0"`,
-    ].join('\r\n');
+    if (process.platform === 'win32') {
+      // Launch Inno Setup installer (/SILENT /FORCECLOSEAPPLICATIONS /CLOSEAPPLICATIONS)
+      const updaterScript = path.join(tempDir, `remotepc_update_${Date.now()}.bat`);
+      const scriptContent = [
+        `@echo off`,
+        `taskkill /F /IM "Remote_Server.exe" /T >nul 2>&1`,
+        `taskkill /F /IM "Remote PC GUI.exe" /T >nul 2>&1`,
+        `taskkill /F /IM "electron.exe" /T >nul 2>&1`,
+        `timeout /t 1 /nobreak >nul`,
+        `start "" "${destPath}" /SILENT /FORCECLOSEAPPLICATIONS /CLOSEAPPLICATIONS /RESTARTAPPLICATIONS=no`,
+        `del "%~f0"`,
+      ].join('\r\n');
 
-    fs.writeFileSync(updaterScript, scriptContent, 'utf-8');
+      fs.writeFileSync(updaterScript, scriptContent, 'utf-8');
 
-    const updaterProc = spawn('cmd.exe', ['/c', updaterScript], {
-      detached: true,
-      stdio: 'ignore',
-      windowsHide: true,
-    });
-    updaterProc.unref();
+      const updaterProc = spawn('cmd.exe', ['/c', updaterScript], {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+      updaterProc.unref();
+    } else {
+      // Linux: make executable and launch AppImage or package
+      try {
+        fs.chmodSync(destPath, 0o755);
+        const linuxProc = spawn(destPath, [], { detached: true, stdio: 'ignore' });
+        linuxProc.unref();
+      } catch (err) {
+        console.warn('Could not launch update binary directly:', err);
+      }
+    }
 
     // Close current Electron application immediately so installer can overwrite files without lock
     setTimeout(() => {
@@ -582,35 +628,47 @@ ipcMain.handle('download-and-install-update', async (event, { url, version }) =>
 
 ipcMain.handle('server:start', async () => {
   try {
-    const candidatePaths = [
-      path.join(app.getAppPath(), '..', 'Remote_Server.exe'),
-      path.join(process.resourcesPath, 'Remote_Server.exe'),
-      path.join(__dirname, '../../Remote_Server.exe'),
-      path.join(__dirname, '../../server/Remote_Server.exe'),
-      path.join(process.cwd(), 'Remote_Server.exe'),
-      path.join(process.cwd(), 'server', 'Remote_Server.exe')
+    const isWin = process.platform === 'win32';
+    const binaryNames = isWin ? ['Remote_Server.exe'] : ['Remote_Server', 'Remote_Server.bin', 'Remote_Server.exe'];
+    const searchDirs = [
+      path.join(app.getAppPath(), '..'),
+      process.resourcesPath,
+      path.join(__dirname, '../..'),
+      path.join(__dirname, '../../server'),
+      process.cwd(),
+      path.join(process.cwd(), 'server')
     ];
-    for (const sPath of candidatePaths) {
-      if (fs.existsSync(sPath)) {
-        console.log('Launching Core Server exe:', sPath);
-        spawn(sPath, [], { detached: true, stdio: 'ignore' }).unref();
-        return { success: true };
+
+    for (const dir of searchDirs) {
+      for (const bName of binaryNames) {
+        const sPath = path.join(dir, bName);
+        if (fs.existsSync(sPath)) {
+          console.log('Launching Core Server executable:', sPath);
+          spawn(sPath, [], { detached: true, stdio: 'ignore' }).unref();
+          return { success: true };
+        }
       }
     }
+
     // Fallback: spawn python script
     const scriptCandidates = [
       path.join(__dirname, '../../server/Remote_Server.py'),
       path.join(process.cwd(), 'server', 'Remote_Server.py'),
       path.join(app.getAppPath(), 'server', 'Remote_Server.py')
     ];
+    const pythonCmds = isWin ? ['python', 'py'] : ['python3', 'python'];
     for (const pyPath of scriptCandidates) {
       if (fs.existsSync(pyPath)) {
-        console.log('Launching Core Server via python:', pyPath);
-        spawn('python', [pyPath], { detached: true, stdio: 'ignore' }).unref();
-        return { success: true };
+        for (const py of pythonCmds) {
+          try {
+            console.log(`Launching Core Server via ${py}:`, pyPath);
+            spawn(py, [pyPath], { detached: true, stdio: 'ignore' }).unref();
+            return { success: true };
+          } catch (_) {}
+        }
       }
     }
-    return { success: false, error: 'Could not find Remote_Server.exe or Remote_Server.py' };
+    return { success: false, error: 'Could not find Remote_Server binary or Remote_Server.py' };
   } catch (e) {
     return { success: false, error: e.message };
   }
@@ -624,15 +682,37 @@ function ensureServerRunning() {
   });
   req.on('error', () => {
     console.log('Remote_Server is not running. Launching...');
-    const candidatePaths = [
-      path.join(app.getAppPath(), '..', 'Remote_Server.exe'),
-      path.join(process.resourcesPath, 'Remote_Server.exe'),
-      path.join(__dirname, '../../Remote_Server.exe'),
-      path.join(__dirname, '../../server/Remote_Server.exe')
+    const isWin = process.platform === 'win32';
+    const binaryNames = isWin ? ['Remote_Server.exe'] : ['Remote_Server', 'Remote_Server.bin', 'Remote_Server.exe'];
+    const searchDirs = [
+      path.join(app.getAppPath(), '..'),
+      process.resourcesPath,
+      path.join(__dirname, '../..'),
+      path.join(__dirname, '../../server'),
+      process.cwd(),
+      path.join(process.cwd(), 'server')
     ];
-    for (const sPath of candidatePaths) {
-      if (fs.existsSync(sPath)) {
-        spawn(sPath, [], { detached: true, stdio: 'ignore' });
+
+    for (const dir of searchDirs) {
+      for (const bName of binaryNames) {
+        const sPath = path.join(dir, bName);
+        if (fs.existsSync(sPath)) {
+          spawn(sPath, [], { detached: true, stdio: 'ignore' }).unref();
+          return;
+        }
+      }
+    }
+
+    // Fallback: spawn python script
+    const scriptCandidates = [
+      path.join(__dirname, '../../server/Remote_Server.py'),
+      path.join(process.cwd(), 'server', 'Remote_Server.py'),
+      path.join(app.getAppPath(), 'server', 'Remote_Server.py')
+    ];
+    const pythonCmd = isWin ? 'python' : 'python3';
+    for (const pyPath of scriptCandidates) {
+      if (fs.existsSync(pyPath)) {
+        spawn(pythonCmd, [pyPath], { detached: true, stdio: 'ignore' }).unref();
         break;
       }
     }

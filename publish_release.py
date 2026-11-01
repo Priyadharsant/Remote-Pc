@@ -85,7 +85,17 @@ def compute_sha256(filepath: Path) -> str:
     return h.hexdigest()
 
 def detect_version() -> str:
-    """Detects version from installer.iss or client build.gradle.kts."""
+    """Detects version from desktop-gui/package.json, installer.iss or client build.gradle.kts."""
+    pkg_file = ROOT_DIR / "desktop-gui" / "package.json"
+    if pkg_file.exists():
+        try:
+            data = json.loads(pkg_file.read_text(encoding="utf-8"))
+            if "version" in data:
+                ver = data["version"].strip()
+                return f"v{ver}" if not ver.startswith("v") else ver
+        except Exception:
+            pass
+
     iss_file = ROOT_DIR / "installer.iss"
     if iss_file.exists():
         text = iss_file.read_text(encoding="utf-8", errors="ignore")
@@ -102,7 +112,7 @@ def detect_version() -> str:
             ver = m.group(1).strip()
             return f"v{ver}" if not ver.startswith("v") else ver
 
-    return "v3.0.0"
+    return "v3.4.0"
 
 def build_artifacts():
     print("\n" + "=" * 65)
@@ -176,6 +186,8 @@ def publish_release(token: str, repo: str, tag: str, title: str, notes: str, dra
     # 1. Locate release assets
     apk_file = ROOT_DIR / "Remote PC.apk"
     exe_file = ROOT_DIR / "Remote_PC_Setup.exe"
+    deb_file = ROOT_DIR / "Remote_PC_Ubuntu_amd64.deb"
+    tar_file = ROOT_DIR / "Remote_PC_Linux_x86_64.tar.gz"
 
     # Also check client output if root apk is absent
     if not apk_file.exists():
@@ -184,30 +196,31 @@ def publish_release(token: str, repo: str, tag: str, title: str, notes: str, dra
             import shutil
             shutil.copy2(candidate_apk, apk_file)
 
-    missing = []
-    if not apk_file.exists():
-        missing.append("Remote PC.apk")
-    if not exe_file.exists():
-        missing.append("Remote_PC_Setup.exe")
+    candidates = [
+        (apk_file, "Remote PC.apk", "application/vnd.android.package-archive"),
+        (deb_file, "Remote_PC_Ubuntu_amd64.deb", "application/vnd.debian.binary-package"),
+        (tar_file, "Remote_PC_Linux_x86_64.tar.gz", "application/gzip"),
+        (exe_file, "Remote_PC_Setup.exe", "application/vnd.microsoft.portable-executable")
+    ]
 
-    if missing:
-        print(f"❌ Missing required build assets: {', '.join(missing)}")
-        print("💡 Run with --build flag to compile them automatically first.")
+    assets_to_upload = []
+    checksum_lines = []
+    for filepath, filename, content_type in candidates:
+        if filepath.exists():
+            checksum_lines.append(f"{compute_sha256(filepath)}  {filename}")
+            assets_to_upload.append((filepath, filename, content_type))
+            print(f"📦 Found asset: {filename} ({filepath.stat().st_size / (1024 * 1024):.1f} MB)")
+        else:
+            print(f"ℹ️  Asset not found (skipping): {filename}")
+
+    if not assets_to_upload:
+        print("❌ No release assets found to upload!")
         sys.exit(1)
 
     # Create checksums
-    checksum_lines = [
-        f"{compute_sha256(apk_file)}  Remote PC.apk",
-        f"{compute_sha256(exe_file)}  Remote_PC_Setup.exe"
-    ]
     checksum_file = ROOT_DIR / "checksums.txt"
     checksum_file.write_text("\n".join(checksum_lines) + "\n", encoding="utf-8")
-
-    assets_to_upload = [
-        (exe_file, "Remote_PC_Setup.exe", "application/vnd.microsoft.portable-executable"),
-        (apk_file, "Remote PC.apk", "application/vnd.android.package-archive"),
-        (checksum_file, "checksums.txt", "text/plain")
-    ]
+    assets_to_upload.insert(0, (checksum_file, "checksums.txt", "text/plain"))
 
     # 2. Check if release already exists for this tag
     base_url = f"https://api.github.com/repos/{repo}/releases"

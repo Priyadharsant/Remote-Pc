@@ -1,8 +1,11 @@
+import sys
 import ctypes
 import subprocess
 import threading
 import time
 import pyautogui
+
+_IS_WINDOWS = sys.platform == "win32"
 
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0
@@ -26,30 +29,100 @@ def run_with_cooldown(name: str, action, cooldown_seconds: float) -> bool:
     return True
 
 def mute_toggle() -> None:
-    pyautogui.press('volumemute')
+    if _IS_WINDOWS:
+        pyautogui.press('volumemute')
+    else:
+        # PipeWire wpctl or ALSA amixer toggle
+        try:
+            res = subprocess.run(['wpctl', 'set-mute', '@DEFAULT_AUDIO_SINK@', 'toggle'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.0)
+            if res.returncode == 0:
+                return
+        except Exception:
+            pass
+        try:
+            subprocess.run(['amixer', '-q', 'sset', 'Master', 'toggle'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.0)
+        except Exception:
+            try:
+                pyautogui.press('volumemute')
+            except Exception:
+                pass
 
 def open_start_menu() -> None:
-    pyautogui.press('win')
+    if _IS_WINDOWS:
+        pyautogui.press('win')
+    else:
+        # Super key toggles GNOME Shell Overview / Dash
+        try:
+            pyautogui.press('super')
+        except Exception:
+            try:
+                pyautogui.press('win')
+            except Exception:
+                pass
 
 def show_desktop() -> None:
-    pyautogui.hotkey('win', 'd')
+    if _IS_WINDOWS:
+        pyautogui.hotkey('win', 'd')
+    else:
+        # On Ubuntu / GNOME, Super+D or Ctrl+Alt+D shows desktop
+        try:
+            pyautogui.hotkey('super', 'd')
+        except Exception:
+            try:
+                pyautogui.hotkey('ctrl', 'alt', 'd')
+            except Exception:
+                pass
 
 def screen_off() -> None:
-    ctypes.windll.user32.SendMessageW(
-        HWND_BROADCAST,
-        WM_SYSCOMMAND,
-        SC_MONITORPOWER,
-        MONITOR_POWER_OFF,
-    )
+    if _IS_WINDOWS:
+        try:
+            ctypes.windll.user32.SendMessageW(
+                HWND_BROADCAST,
+                WM_SYSCOMMAND,
+                SC_MONITORPOWER,
+                MONITOR_POWER_OFF,
+            )
+        except Exception:
+            pass
+    else:
+        # Linux: try xset dpms, loginctl, or systemctl
+        try:
+            subprocess.run(['xset', 'dpms', 'force', 'off'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.0)
+        except Exception:
+            try:
+                subprocess.run(['loginctl', 'lock-session'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.0)
+            except Exception:
+                pass
 
 def lock_pc() -> None:
-    ctypes.windll.user32.LockWorkStation()
+    if _IS_WINDOWS:
+        try:
+            ctypes.windll.user32.LockWorkStation()
+        except Exception:
+            pass
+    else:
+        # Linux session locking
+        for cmd in (['loginctl', 'lock-session'], ['xdg-screensaver', 'lock'], ['gnome-screensaver-command', '-l']):
+            try:
+                if subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.0).returncode == 0:
+                    break
+            except Exception:
+                continue
 
 def sleep_pc() -> None:
-    subprocess.Popen(['rundll32.exe', 'powrprof.dll,SetSuspendState', '0,1,0'], shell=False)
+    if _IS_WINDOWS:
+        subprocess.Popen(['rundll32.exe', 'powrprof.dll,SetSuspendState', '0,1,0'], shell=False)
+    else:
+        subprocess.Popen(['systemctl', 'suspend'])
 
 def restart_pc() -> None:
-    subprocess.Popen(['shutdown', '/r', '/t', '0'], shell=False)
+    if _IS_WINDOWS:
+        subprocess.Popen(['shutdown', '/r', '/t', '0'], shell=False)
+    else:
+        subprocess.Popen(['systemctl', 'reboot'])
 
 def shutdown_pc() -> None:
-    subprocess.Popen(['shutdown', '/s', '/t', '0'], shell=False)
+    if _IS_WINDOWS:
+        subprocess.Popen(['shutdown', '/s', '/t', '0'], shell=False)
+    else:
+        subprocess.Popen(['systemctl', 'poweroff'])

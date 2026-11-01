@@ -1,7 +1,10 @@
 {
   "name": "desktop-gui",
-  "private": true,
-  "version": "3.3.0",
+  "productName": "Remote PC GUI",
+  "version": "3.4.0",
+  "description": "Remote PC Control Suite & Wireless Server GUI",
+  "author": "Priyan <priyan@remotepc.local>",
+  "homepage": "https://github.com/priyan/Remote-Pc",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -12,8 +15,11 @@
     "electron:dev": "concurrently -k \"vite\" \"wait-on tcp:5173 && cross-env NODE_ENV=development electron electron/main.cjs\"",
     "electron:start": "cross-env NODE_ENV=development electron electron/main.cjs",
     "build:gui": "tsc -b && vite build && electron-builder --win --dir",
+    "build:gui:linux": "tsc -b && vite build && electron-builder --linux --dir",
     "pack:dir": "tsc -b && vite build && electron-builder --win --dir",
-    "pack:exe": "tsc -b && vite build && electron-builder --win portable"
+    "pack:exe": "tsc -b && vite build && electron-builder --win portable",
+    "pack:appimage": "tsc -b && vite build && electron-builder --linux AppImage",
+    "pack:deb": "tsc -b && vite build && electron-builder --linux deb"
   },
   "build": {
     "appId": "com.remotepc.desktop",
@@ -30,6 +36,14 @@
       "icon": "../server/logo.ico",
       "target": [
         "dir"
+      ]
+    },
+    "linux": {
+      "icon": "../server/logo.png",
+      "category": "Utility",
+      "target": [
+        "dir",
+        "AppImage"
       ]
     }
   },
@@ -55,5 +69,8 @@
     "typescript": "~6.0.2",
     "vite": "^8.3.0",
     "wait-on": "^9.5.1"
+  },
+  "optionalDependencies": {
+    "@rolldown/binding-linux-x64-gnu": "^1.2.16"
   }
 }

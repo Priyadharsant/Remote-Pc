@@ -3,12 +3,11 @@ import { Shield, Key, Monitor, CheckCircle, ArrowRight, Lock, AlertCircle, Refre
 import { api } from '../api';
 
 interface SetupWizardProps {
-  defaultName?: string;
   onComplete: () => void;
 }
 
-export const SetupWizard: React.FC<SetupWizardProps> = ({ defaultName = 'My-PC', onComplete }) => {
-  const [name, setName] = useState(defaultName);
+export const SetupWizard: React.FC<SetupWizardProps> = ({ onComplete }) => {
+  const [name, setName] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [strictAutoConnect, setStrictAutoConnect] = useState(true);
@@ -91,7 +90,7 @@ export const SetupWizard: React.FC<SetupWizardProps> = ({ defaultName = 'My-PC',
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Priyan-PC"
+              placeholder="Enter PC Name (e.g. My Ubuntu PC)"
               className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3.5 py-2.5 text-sm text-slate-100 placeholder-slate-600 focus:outline-none focus:border-cyan-500/60 transition"
               required
             />
