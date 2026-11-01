@@ -94,7 +94,11 @@ data class FsItem(
     val fileType: String = "file",
     val isVideo: Boolean = false,
     val isAudio: Boolean = false,
-    val isImage: Boolean = false
+    val isImage: Boolean = false,
+    val isApp: Boolean = false,
+    val appType: String? = null,
+    val hasThumbnail: Boolean = false,
+    val isLive: Boolean = false
 )
 
 data class LocalFileItem(
@@ -104,11 +108,21 @@ data class LocalFileItem(
     val uri: Uri,
     val category: String, // "video", "audio", "image", "document", "file"
     val duration: Long = 0L,
-    val ext: String = ""
+    val ext: String = "",
+    val isLive: Boolean = false
 ) {
     // Compatibility property
     val title: String get() = name
 }
+
+data class TransferProgressState(
+    val fileName: String,
+    val direction: String, // "PC ➔ Phone" or "Phone ➔ PC"
+    val transferredBytes: Long = 0L,
+    val totalBytes: Long = -1L,
+    val speedFormatted: String = "0 KB/s",
+    val percent: Int = 0
+)
 
 typealias LocalVideo = LocalFileItem
 
@@ -3346,6 +3360,114 @@ fun KeyBtn(
     }
 }
 
+@Composable
+fun DeviceTransferProgressCard(
+    transfer: TransferProgressState,
+    onCancel: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 6.dp),
+        shape = RoundedCornerShape(14.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
+        border = BorderStroke(1.5.dp, Color(0xFF38BDF8).copy(alpha = 0.6f))
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(CircleShape)
+                            .background(Color(0xFF38BDF8).copy(alpha = 0.2f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = if (transfer.direction.contains("PC ➔")) Icons.Rounded.Download else Icons.Rounded.Upload,
+                            contentDescription = null,
+                            tint = Color(0xFF38BDF8),
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = transfer.fileName,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = Color(0xFFF8FAFC),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        Text(
+                            text = "${transfer.direction} • ⚡ ${transfer.speedFormatted}",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFF38BDF8)
+                        )
+                    }
+                }
+
+                Spacer(Modifier.width(8.dp))
+
+                OutlinedButton(
+                    onClick = onCancel,
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = Color(0xFFEF4444)
+                    ),
+                    border = BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.7f)),
+                    shape = RoundedCornerShape(8.dp),
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                    modifier = Modifier.height(30.dp)
+                ) {
+                    Icon(Icons.Rounded.Close, contentDescription = "Cancel", modifier = Modifier.size(14.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Cancel", fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            Spacer(Modifier.height(10.dp))
+
+            LinearProgressIndicator(
+                progress = { (transfer.percent / 100f).coerceIn(0f, 1f) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp)),
+                color = Color(0xFF38BDF8),
+                trackColor = Color(0xFF334155)
+            )
+
+            Spacer(Modifier.height(6.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                val transferredStr = formatFileSize(transfer.transferredBytes)
+                val totalStr = if (transfer.totalBytes > 0) formatFileSize(transfer.totalBytes) else "--"
+                Text(
+                    text = "$transferredStr / $totalStr",
+                    fontSize = 11.sp,
+                    color = Color(0xFF94A3B8)
+                )
+                Text(
+                    text = "${transfer.percent}%",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF38BDF8)
+                )
+            }
+        }
+    }
+}
+
 // -------------------------------------------------------------
 // -------------------------------------------------------------
 // -------------------------------------------------------------
@@ -3369,6 +3491,8 @@ fun PcFileManagerScreen(
     var searchQuery by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf("all") }
     var downloadingFile by remember { mutableStateOf<String?>(null) }
+    var activeTransferState by remember { mutableStateOf<TransferProgressState?>(null) }
+    var activeDownloadCall by remember { mutableStateOf<okhttp3.Call?>(null) }
     var pendingPcOpenItem by remember { mutableStateOf<FsItem?>(null) }
 
     // Previews & In-App Viewers
@@ -3484,7 +3608,11 @@ fun PcFileManagerScreen(
                                     fileType = obj.optString("file_type", "file"),
                                     isVideo = obj.optBoolean("is_video", false),
                                     isAudio = obj.optBoolean("is_audio", false),
-                                    isImage = obj.optBoolean("is_image", false)
+                                    isImage = obj.optBoolean("is_image", false),
+                                    isApp = obj.optBoolean("is_app", false) || obj.optString("file_type") == "app",
+                                    appType = if (obj.has("app_type") && !obj.isNull("app_type")) obj.getString("app_type") else null,
+                                    hasThumbnail = obj.optBoolean("has_thumbnail", false),
+                                    isLive = obj.optBoolean("is_live", false)
                                 )
                             )
                         }
@@ -3535,54 +3663,118 @@ fun PcFileManagerScreen(
 
     fun downloadToPhone(item: FsItem) {
         downloadingFile = item.name
+        val initialState = TransferProgressState(
+            fileName = item.name,
+            direction = "PC ➔ Phone",
+            transferredBytes = 0L,
+            totalBytes = item.size,
+            speedFormatted = "Connecting...",
+            percent = 0
+        )
+        activeTransferState = initialState
         Toast.makeText(context, "Saving '${item.name}' to Phone Downloads...", Toast.LENGTH_SHORT).show()
+
         scope.launch(Dispatchers.IO) {
+            var targetUri: Uri? = null
+            var targetFile: File? = null
             try {
                 val clean = if (!targetIp.contains(":")) "$targetIp:5055" else targetIp
                 val encodedPath = URLEncoder.encode(item.path, "UTF-8")
-                val encodedPass = URLEncoder.encode(password, "UTF-8")
+                val encodedPass = URLEncoder.encode(effectivePass, "UTF-8")
                 val req = Request.Builder()
-                    .url("http://$clean/fs/download?path=$encodedPath&password=$encodedPass")
-                    .addHeader("X-Remote-Password", password)
+                    .url("http://$clean/fs/download?path=$encodedPath&password=$encodedPass$tokenParam")
+                    .withAuthHeaders()
                     .get()
                     .build()
-                okHttpClient.newCall(req).execute().use { resp ->
+                val call = okHttpClient.newCall(req)
+                withContext(Dispatchers.Main) { activeDownloadCall = call }
+
+                call.execute().use { resp ->
                     if (!resp.isSuccessful) throw IOException("Server returned ${resp.code}")
                     val body = resp.body ?: throw IOException("Empty response")
+                    val totalLen = if (body.contentLength() > 0) body.contentLength() else item.size
 
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    val outputStream = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                         val values = ContentValues().apply {
                             put(MediaStore.MediaColumns.DISPLAY_NAME, item.name)
                             put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS)
                         }
                         val uri = context.contentResolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-                        if (uri != null) {
-                            context.contentResolver.openOutputStream(uri)?.use { out ->
-                                body.byteStream().copyTo(out)
-                            }
-                        } else {
-                            throw IOException("Could not create MediaStore entry")
-                        }
+                            ?: throw IOException("Could not create MediaStore entry")
+                        targetUri = uri
+                        context.contentResolver.openOutputStream(uri) ?: throw IOException("Cannot open output stream")
                     } else {
                         val dir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
                         dir.mkdirs()
-                        val target = File(dir, item.name)
-                        body.byteStream().use { input ->
-                            FileOutputStream(target).use { output ->
-                                input.copyTo(output)
+                        val file = File(dir, item.name)
+                        targetFile = file
+                        FileOutputStream(file)
+                    }
+
+                    outputStream.use { out ->
+                        val buffer = ByteArray(64 * 1024)
+                        var bytesRead: Int
+                        var transferred = 0L
+                        var lastTime = System.currentTimeMillis()
+                        var lastBytes = 0L
+                        val input = body.byteStream()
+
+                        while (input.read(buffer).also { bytesRead = it } != -1) {
+                            out.write(buffer, 0, bytesRead)
+                            transferred += bytesRead
+                            val now = System.currentTimeMillis()
+                            val dt = now - lastTime
+                            if (dt >= 200) {
+                                val speedBytesPerSec = ((transferred - lastBytes) * 1000L) / dt
+                                val speedStr = if (speedBytesPerSec > 1024 * 1024) {
+                                    String.format(Locale.US, "%.1f MB/s", speedBytesPerSec / 1048576.0)
+                                } else {
+                                    String.format(Locale.US, "%d KB/s", speedBytesPerSec / 1024)
+                                }
+                                val pct = if (totalLen > 0) ((transferred * 100) / totalLen).toInt().coerceIn(0, 100) else 0
+                                lastTime = now
+                                lastBytes = transferred
+
+                                withContext(Dispatchers.Main) {
+                                    activeTransferState = TransferProgressState(
+                                        fileName = item.name,
+                                        direction = "PC ➔ Phone",
+                                        transferredBytes = transferred,
+                                        totalBytes = totalLen,
+                                        speedFormatted = speedStr,
+                                        percent = pct
+                                    )
+                                }
                             }
                         }
+                        out.flush()
                     }
 
                     withContext(Dispatchers.Main) {
                         downloadingFile = null
+                        activeTransferState = null
+                        activeDownloadCall = null
                         Toast.makeText(context, "Saved to Downloads: ${item.name}", Toast.LENGTH_LONG).show()
                     }
                 }
             } catch (e: Exception) {
+                try {
+                    if (targetUri != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        context.contentResolver.delete(targetUri!!, null, null)
+                    } else if (targetFile != null && targetFile!!.exists()) {
+                        targetFile!!.delete()
+                    }
+                } catch (_: Exception) {}
+
                 withContext(Dispatchers.Main) {
                     downloadingFile = null
-                    Toast.makeText(context, "Download failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                    activeTransferState = null
+                    activeDownloadCall = null
+                    if (e is IOException && e.message?.contains("Canceled", ignoreCase = true) == true) {
+                        Toast.makeText(context, "Transfer cancelled.", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "Download failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
         }
@@ -3859,6 +4051,16 @@ fun PcFileManagerScreen(
                 .padding(padding)
                 .padding(horizontal = 14.dp, vertical = 8.dp)
         ) {
+            // Active Transfer Progress Overlay Card
+            activeTransferState?.let { tx ->
+                DeviceTransferProgressCard(
+                    transfer = tx,
+                    onCancel = {
+                        activeDownloadCall?.cancel()
+                    }
+                )
+            }
+
             // Search Bar
             OutlinedTextField(
                 value = searchQuery,
@@ -4034,9 +4236,20 @@ fun PcFileManagerScreen(
                         val isImage = item.isImage || item.fileType == "image"
                         val isDoc = item.fileType == "document"
                         val isArchive = item.fileType == "archive"
+                        val isApp = item.isApp || item.fileType == "app" || item.ext.lowercase() in listOf("apk", "deb", "exe", "msi", "appimage", "desktop", "xapk")
 
                         val (tintColor, iconVector) = when {
                             item.isDir -> Pair(AppTheme.AccentAmber, Icons.Rounded.Folder)
+                            isApp -> {
+                                val ext = item.ext.lowercase()
+                                if (ext in listOf("apk", "xapk") || item.appType == "apk") {
+                                    Pair(Color(0xFF22C55E), Icons.Rounded.TouchApp)
+                                } else if (ext in listOf("exe", "msi") || item.appType == "exe") {
+                                    Pair(Color(0xFF0284C7), Icons.Rounded.Window)
+                                } else {
+                                    Pair(Color(0xFFE95420), Icons.Rounded.DesktopWindows)
+                                }
+                            }
                             isVideo -> Pair(AppTheme.AccentCyan, Icons.Rounded.VideoFile)
                             isAudio -> Pair(AppTheme.AccentEmerald, Icons.Rounded.AudioFile)
                             isImage -> Pair(Color(0xFFEC4899), Icons.Rounded.Image)
@@ -4054,7 +4267,7 @@ fun PcFileManagerScreen(
                                 },
                             shape = RoundedCornerShape(12.dp),
                             colors = CardDefaults.cardColors(containerColor = AppTheme.CardDark),
-                            border = BorderStroke(1.dp, AppTheme.CardBorderSubtle)
+                            border = if (item.isLive) BorderStroke(1.5.dp, Color(0xFF10B981)) else BorderStroke(1.dp, AppTheme.CardBorderSubtle)
                         ) {
                             Row(
                                 modifier = Modifier.padding(12.dp),
@@ -4064,7 +4277,19 @@ fun PcFileManagerScreen(
                                 Spacer(Modifier.width(10.dp))
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(item.name, fontWeight = FontWeight.SemiBold, color = AppTheme.TextPrimary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                    if (!item.isDir) {
+                                    if (item.isLive) {
+                                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+                                            Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(Color(0xFF10B981)))
+                                            Spacer(Modifier.width(4.dp))
+                                            Text("LIVE SHARING", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981))
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(
+                                                "${formatFileSize(item.size)} • ${if (item.ext.isNotEmpty()) item.ext.uppercase() else "FILE"}",
+                                                fontSize = 11.sp,
+                                                color = Color(0xFF94A3B8)
+                                            )
+                                        }
+                                    } else if (!item.isDir) {
                                         Text(
                                             "${formatFileSize(item.size)} • ${if (item.ext.isNotEmpty()) item.ext.uppercase() else "FILE"}",
                                             fontSize = 11.sp,
@@ -4311,6 +4536,8 @@ fun PhoneFileManagerScreen(
     var searchQuery by remember { mutableStateOf("") }
     var selectedCategory by remember { mutableStateOf("all") }
     var uploadingFile by remember { mutableStateOf<String?>(null) }
+    var activeUploadState by remember { mutableStateOf<TransferProgressState?>(null) }
+    var activeUploadCall by remember { mutableStateOf<okhttp3.Call?>(null) }
     var showAllFilesConfirm by remember { mutableStateOf(false) }
 
     val scope = rememberCoroutineScope()
@@ -4386,7 +4613,8 @@ fun PhoneFileManagerScreen(
                         val size = cursor.getLong(sizeCol)
                         val uri = ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, id)
                         val ext = name.substringAfterLast(".", "")
-                        list.add(LocalFileItem(id, name, size, uri, "video", dur, ext))
+                        val isLive = (id == VideoStreamServer.activeStreamingId) && (System.currentTimeMillis() - VideoStreamServer.activeStreamingTime < 15000L)
+                        list.add(LocalFileItem(id, name, size, uri, "video", dur, ext, isLive))
                     }
                 }
 
@@ -4513,20 +4741,60 @@ fun PhoneFileManagerScreen(
 
     fun uploadToPc(item: LocalFileItem) {
         uploadingFile = item.name
+        val initialState = TransferProgressState(
+            fileName = item.name,
+            direction = "Phone ➔ PC",
+            transferredBytes = 0L,
+            totalBytes = item.size,
+            speedFormatted = "Connecting...",
+            percent = 0
+        )
+        activeUploadState = initialState
         Toast.makeText(context, "Saving '${item.name}' to PC...", Toast.LENGTH_SHORT).show()
+
         scope.launch(Dispatchers.IO) {
             try {
                 val clean = if (!targetIp.contains(":")) "$targetIp:5055" else targetIp
                 val encodedName = URLEncoder.encode(item.name, "UTF-8")
+                val totalLen = item.size
+                var lastTime = System.currentTimeMillis()
+                var lastBytes = 0L
+
                 val reqBody = object : RequestBody() {
                     override fun contentType() = "application/octet-stream".toMediaTypeOrNull()
-                    override fun contentLength() = item.size
+                    override fun contentLength() = totalLen
                     override fun writeTo(sink: BufferedSink) {
                         context.contentResolver.openInputStream(item.uri)?.use { input ->
-                            val buf = ByteArray(16384)
+                            val buf = ByteArray(32 * 1024)
                             var read: Int
+                            var transferred = 0L
                             while (input.read(buf).also { read = it } != -1) {
                                 sink.write(buf, 0, read)
+                                transferred += read
+                                val now = System.currentTimeMillis()
+                                val dt = now - lastTime
+                                if (dt >= 200) {
+                                    val speedBytesPerSec = ((transferred - lastBytes) * 1000L) / dt
+                                    val speedStr = if (speedBytesPerSec > 1024 * 1024) {
+                                        String.format(Locale.US, "%.1f MB/s", speedBytesPerSec / 1048576.0)
+                                    } else {
+                                        String.format(Locale.US, "%d KB/s", speedBytesPerSec / 1024)
+                                    }
+                                    val pct = if (totalLen > 0) ((transferred * 100) / totalLen).toInt().coerceIn(0, 100) else 0
+                                    lastTime = now
+                                    lastBytes = transferred
+
+                                    scope.launch(Dispatchers.Main) {
+                                        activeUploadState = TransferProgressState(
+                                            fileName = item.name,
+                                            direction = "Phone ➔ PC",
+                                            transferredBytes = transferred,
+                                            totalBytes = totalLen,
+                                            speedFormatted = speedStr,
+                                            percent = pct
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -4541,9 +4809,14 @@ fun PhoneFileManagerScreen(
                         if (token.isNotEmpty()) addHeader("X-Device-Token", token)
                     }
                     .build()
-                okHttpClient.newCall(req).execute().use { resp ->
+                val call = okHttpClient.newCall(req)
+                withContext(Dispatchers.Main) { activeUploadCall = call }
+
+                call.execute().use { resp ->
                     withContext(Dispatchers.Main) {
                         uploadingFile = null
+                        activeUploadState = null
+                        activeUploadCall = null
                         if (resp.isSuccessful) {
                             Toast.makeText(context, "Saved to PC Downloads: ${item.name}", Toast.LENGTH_LONG).show()
                         } else {
@@ -4554,7 +4827,13 @@ fun PhoneFileManagerScreen(
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
                     uploadingFile = null
-                    Toast.makeText(context, "Upload failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                    activeUploadState = null
+                    activeUploadCall = null
+                    if (e is IOException && e.message?.contains("Canceled", ignoreCase = true) == true) {
+                        Toast.makeText(context, "Upload cancelled.", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(context, "Upload failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                    }
                 }
             }
         }
@@ -4670,6 +4949,16 @@ fun PhoneFileManagerScreen(
                 .padding(padding)
                 .padding(horizontal = 14.dp, vertical = 8.dp)
         ) {
+            // Active Upload Progress Overlay Card
+            activeUploadState?.let { tx ->
+                DeviceTransferProgressCard(
+                    transfer = tx,
+                    onCancel = {
+                        activeUploadCall?.cancel()
+                    }
+                )
+            }
+
             // Search Bar
             OutlinedTextField(
                 value = searchQuery,
@@ -4822,7 +5111,8 @@ fun PhoneFileManagerScreen(
                                 .fillMaxWidth()
                                 .padding(vertical = 3.dp),
                             shape = RoundedCornerShape(12.dp),
-                            colors = CardDefaults.cardColors(containerColor = AppTheme.CardDark)
+                            colors = CardDefaults.cardColors(containerColor = AppTheme.CardDark),
+                            border = if (item.isLive) BorderStroke(1.5.dp, Color(0xFF10B981)) else BorderStroke(1.dp, AppTheme.CardBorderSubtle)
                         ) {
                             Row(
                                 modifier = Modifier.padding(12.dp),
@@ -4838,11 +5128,25 @@ fun PhoneFileManagerScreen(
                                         val sec = TimeUnit.MILLISECONDS.toSeconds(item.duration) % 60
                                         " • ${String.format(Locale.US, "%02d:%02d", min, sec)}"
                                     } else ""
-                                    Text(
-                                        "$sizeStr$durStr • ${item.category.uppercase()}",
-                                        fontSize = 11.sp,
-                                        color = Color(0xFF94A3B8)
-                                    )
+                                    if (item.isLive) {
+                                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+                                            Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(Color(0xFF10B981)))
+                                            Spacer(Modifier.width(4.dp))
+                                            Text("LIVE SHARING", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981))
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(
+                                                "$sizeStr$durStr • ${item.category.uppercase()}",
+                                                fontSize = 11.sp,
+                                                color = Color(0xFF94A3B8)
+                                            )
+                                        }
+                                    } else {
+                                        Text(
+                                            "$sizeStr$durStr • ${item.category.uppercase()}",
+                                            fontSize = 11.sp,
+                                            color = Color(0xFF94A3B8)
+                                        )
+                                    }
                                 }
 
                                 // Save to PC (Upload)

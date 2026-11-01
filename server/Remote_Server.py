@@ -20,9 +20,9 @@ import traceback
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, Response
 
-from controllers import brightness, keyboard, media, mouse, system_controls, volume, video_stream, remote_desktop, camera_recorder, folder_sync
+from controllers import brightness, keyboard, media, mouse, system_controls, volume, video_stream, remote_desktop, camera_recorder, folder_sync, thumbnail_generator
 
 
 _LOG_ENTRIES = []
@@ -487,6 +487,15 @@ def run_guarded_command(name: str, action: Callable[[], None], message: str, coo
 
 CONNECTED_CLIENTS = {}
 PENDING_PAIRINGS = {}
+ACTIVE_LIVE_STREAMS = {}
+ACTIVE_FILE_TRANSFERS = {}
+
+def get_active_live_streams() -> list:
+    now = time.time()
+    expired = [k for k, v in ACTIVE_LIVE_STREAMS.items() if now - v.get('last_active', 0) > 15]
+    for k in expired:
+        ACTIVE_LIVE_STREAMS.pop(k, None)
+    return list(ACTIVE_LIVE_STREAMS.values())
 
 def check_auth(supplied_password: str | None, x_device_token: str | None = None, client_ip: str | None = None) -> bool:
     # If strict_auto_connect is disabled, automatically allow local network connections
@@ -626,7 +635,8 @@ def get_status() -> dict:
         'clients': list(CONNECTED_CLIENTS.values()),
         'paired_devices_count': len(CONFIG.get('trusted_devices', [])),
         'is_configured': bool(CONFIG.get('is_configured', False)),
-        'strict_auto_connect': bool(CONFIG.get('strict_auto_connect', True))
+        'strict_auto_connect': bool(CONFIG.get('strict_auto_connect', True)),
+        'active_streams': get_active_live_streams()
     }
 
 def get_discovery_response() -> str:
@@ -981,13 +991,38 @@ def list_drives() -> dict:
 @app.get('/fs/list', dependencies=[Depends(require_auth)])
 def list_fs(path: str = Query(default="")) -> dict:
     try:
-        return video_stream.list_folder(path)
+        data = video_stream.list_folder(path)
+        active_streams = get_active_live_streams()
+        active_paths = {os.path.abspath(s.get('path', '')) for s in active_streams if s.get('path')}
+        active_names = {s.get('filename') for s in active_streams if s.get('filename')}
+        for it in data.get('items', []):
+            item_path = os.path.abspath(it.get('path', '')) if it.get('path') else ''
+            it['is_live'] = (item_path in active_paths) or (it.get('name') in active_names)
+        data['active_streams'] = active_streams
+        return data
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="Directory not found")
     except PermissionError:
         raise HTTPException(status_code=403, detail="Permission denied")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get('/fs/active-streams')
+def get_active_streams_endpoint() -> dict:
+    return {"status": "ok", "active_streams": get_active_live_streams()}
+
+@app.post('/fs/stream/stop')
+def stop_active_stream(path: str = Query(default=""), id: str = Query(default="")) -> dict:
+    to_delete = []
+    norm_path = os.path.abspath(path) if path else ""
+    for k, v in list(ACTIVE_LIVE_STREAMS.items()):
+        if id and (k == id or v.get("id") == id):
+            to_delete.append(k)
+        elif path and (v.get("path") == path or (norm_path and os.path.abspath(v.get("path", "")) == norm_path) or v.get("filename") == os.path.basename(path)):
+            to_delete.append(k)
+    for k in to_delete:
+        ACTIVE_LIVE_STREAMS.pop(k, None)
+    return {"status": "ok", "stopped": len(to_delete)}
 
 @app.get('/fs/stream')
 @app.get('/media/stream')
@@ -1009,6 +1044,29 @@ def stream_video(
     if not content_type:
         content_type = "video/mp4"
 
+    norm_path = os.path.abspath(path)
+    client_ip = request.client.host if request.client else "unknown"
+    stream_key = f"{norm_path}::{client_ip}"
+    ACTIVE_LIVE_STREAMS[stream_key] = {
+        "id": stream_key,
+        "path": norm_path,
+        "filename": os.path.basename(norm_path),
+        "client": client_ip,
+        "started_at": ACTIVE_LIVE_STREAMS.get(stream_key, {}).get("started_at", time.time()),
+        "last_active": time.time(),
+        "type": "video"
+    }
+
+    def tracked_stream_generator(gen):
+        try:
+            for chunk in gen:
+                if stream_key in ACTIVE_LIVE_STREAMS:
+                    ACTIVE_LIVE_STREAMS[stream_key]["last_active"] = time.time()
+                yield chunk
+        finally:
+            if stream_key in ACTIVE_LIVE_STREAMS:
+                ACTIVE_LIVE_STREAMS[stream_key]["last_active"] = time.time()
+
     if range_header:
         start, end = video_stream.parse_range_header(range_header, file_size)
         content_length = end - start + 1
@@ -1019,7 +1077,7 @@ def stream_video(
             "Content-Type": content_type,
         }
         return StreamingResponse(
-            video_stream.get_file_range_generator(path, start, end),
+            tracked_stream_generator(video_stream.get_file_range_generator(norm_path, start, end)),
             status_code=206,
             headers=headers,
             media_type=content_type,
@@ -1031,7 +1089,7 @@ def stream_video(
             "Content-Type": content_type,
         }
         return StreamingResponse(
-            video_stream.get_file_range_generator(path, 0, file_size - 1),
+            tracked_stream_generator(video_stream.get_file_range_generator(norm_path, 0, file_size - 1)),
             status_code=200,
             headers=headers,
             media_type=content_type,
@@ -1053,6 +1111,28 @@ def download_file(
         filename=filename,
         media_type="application/octet-stream"
     )
+
+@app.get('/fs/thumbnail')
+def get_fs_thumbnail(
+    request: Request,
+    path: str = Query(...),
+    password: str | None = Query(default=None),
+    x_remote_password: str | None = Header(default=None),
+    x_device_token: str | None = Header(default=None),
+    token: str | None = Query(default=None)
+):
+    require_auth(request=request, password=password, x_remote_password=x_remote_password, x_device_token=x_device_token or token)
+    if not os.path.exists(path) or not os.path.isfile(path):
+        raise HTTPException(status_code=404, detail="File not found")
+    try:
+        thumb_bytes = thumbnail_generator.get_thumbnail(path)
+        return Response(
+            content=thumb_bytes,
+            media_type="image/png",
+            headers={"Cache-Control": "public, max-age=86400"}
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post('/fs/upload', dependencies=[Depends(require_auth)])
 async def upload_file(
@@ -1467,6 +1547,18 @@ def play_media_on_pc(
             if placeholder in target_url:
                 target_url = target_url.replace(placeholder, client_ip)
 
+    stream_key = f"pc_player::{target_url}"
+    name = os.path.basename(target_url.split('?')[0]) if '?' in target_url else os.path.basename(target_url)
+    ACTIVE_LIVE_STREAMS[stream_key] = {
+        "id": stream_key,
+        "path": target_url,
+        "filename": name or "Live Stream",
+        "client": client_ip or "localhost",
+        "started_at": time.time(),
+        "last_active": time.time() + 60,
+        "type": "pc_player"
+    }
+
     success = video_stream.open_media_on_pc(target_url)
     if success:
         return {"status": "ok", "message": f"Playing {target_url} on PC"}
@@ -1808,11 +1900,41 @@ def preview_file_from_phone(ip: str = Query(default=""), file_id: str = Query(..
             continue
     raise HTTPException(status_code=404, detail="File could not be streamed from phone")
 
-@app.post('/phone/storage/download')
-def download_file_from_phone(ip: str = Query(default=""), file_id: str = Query(...), file_type: str = Query(default="image"), filename: str = Query(default="file")) -> dict:
+@app.get('/phone/storage/thumbnail')
+def get_phone_thumbnail(ip: str = Query(default=""), file_id: str = Query(...), file_type: str = Query(default="image"), filename: str = Query(default="")):
+    _auto_forward_adb()
+    ext = os.path.splitext(filename)[1].lower() if filename else ""
+    if ext in thumbnail_generator.APK_EXTENSIONS or ext in thumbnail_generator.EXE_EXTENSIONS or ext in thumbnail_generator.UBT_EXTENSIONS:
+        badge_bytes = thumbnail_generator.get_thumbnail(filename)
+        return Response(content=badge_bytes, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+
+    targets = []
+    if ip and ip.strip():
+        targets.append(ip.strip())
+    for c in CONNECTED_CLIENTS.values():
+        cip = c.get('ip')
+        if cip and cip not in targets:
+            targets.append(cip)
+    if '127.0.0.1' not in targets:
+        targets.append('127.0.0.1')
+
+    for tip in targets:
+        port = 15056 if tip == '127.0.0.1' else 5056
+        url = f"http://{tip}:{port}/storage/thumbnail?id={urllib.parse.quote(file_id)}&type={urllib.parse.quote(file_type)}&filename={urllib.parse.quote(filename)}"
+        try:
+            req = urllib.request.Request(url, method="GET")
+            with urllib.request.urlopen(req, timeout=2.0) as resp:
+                data = resp.read()
+                return Response(content=data, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+        except Exception:
+            pass
+
+    badge_bytes = thumbnail_generator.get_thumbnail(filename)
+    return Response(content=badge_bytes, media_type="image/png", headers={"Cache-Control": "public, max-age=86400"})
+
+def _run_phone_download_worker(tid: str, ip: str, file_id: str, file_type: str, filename: str):
     import urllib.parse
     import urllib.request
-    import shutil
     _auto_forward_adb()
 
     targets = []
@@ -1829,22 +1951,255 @@ def download_file_from_phone(ip: str = Query(default=""), file_id: str = Query(.
     os.makedirs(dest_dir, exist_ok=True)
     safe_filename = "".join(c for c in filename if c.isalnum() or c in (' ', '.', '_', '-')).strip() or f"phone_{file_id}"
     save_path = os.path.join(dest_dir, safe_filename)
+    part_path = save_path + f".part_{tid[:8]}"
+
+    ACTIVE_FILE_TRANSFERS[tid] = {
+        "id": tid,
+        "filename": safe_filename,
+        "direction": "Phone ➔ PC",
+        "transferred": 0,
+        "total": 0,
+        "percent": 0.0,
+        "speed_mb": 0.0,
+        "status": "in_progress",
+        "message": "Connecting to phone...",
+        "saved_path": save_path,
+        "cancel_requested": False
+    }
 
     if os.path.exists(save_path) and os.path.getsize(save_path) > 0:
-        return {'status': 'ok', 'saved_path': save_path, 'filename': safe_filename, 'cached': True}
+        file_sz = os.path.getsize(save_path)
+        ACTIVE_FILE_TRANSFERS[tid].update({
+            "transferred": file_sz,
+            "total": file_sz,
+            "percent": 100.0,
+            "status": "completed",
+            "message": "File already exists in Downloads",
+            "saved_path": save_path
+        })
+        return
 
+    success = False
     for target in targets:
+        if ACTIVE_FILE_TRANSFERS[tid].get("cancel_requested"):
+            break
         base = target if target.startswith("http://") else (f"http://{target}" if ":" in target else f"http://{target}:5056")
         url = f"{base}/storage/file?id={file_id}&type={urllib.parse.quote(file_type)}"
         try:
             req = urllib.request.Request(url, method="GET")
-            with urllib.request.urlopen(req, timeout=30.0) as resp, open(save_path, 'wb') as out_f:
-                shutil.copyfileobj(resp, out_f)
-            log_server_event(f"Downloaded '{safe_filename}' from phone to {save_path}", "SUCCESS")
-            return {'status': 'ok', 'saved_path': save_path, 'filename': safe_filename}
+            with urllib.request.urlopen(req, timeout=30.0) as resp:
+                total_bytes = int(resp.headers.get("Content-Length", 0))
+                ACTIVE_FILE_TRANSFERS[tid]["total"] = total_bytes
+                ACTIVE_FILE_TRANSFERS[tid]["message"] = "Transferring..."
+                transferred = 0
+                last_time = time.time()
+                last_bytes = 0
+                chunk_size = 64 * 1024
+
+                with open(part_path, 'wb') as out_f:
+                    while True:
+                        if ACTIVE_FILE_TRANSFERS[tid].get("cancel_requested"):
+                            break
+                        chunk = resp.read(chunk_size)
+                        if not chunk:
+                            break
+                        out_f.write(chunk)
+                        transferred += len(chunk)
+                        now = time.time()
+                        dt = now - last_time
+                        if dt >= 0.2:
+                            speed = round(((transferred - last_bytes) / (1024 * 1024)) / dt, 2)
+                            last_bytes = transferred
+                            last_time = now
+                            pct = round((transferred / total_bytes) * 100, 1) if total_bytes > 0 else 0.0
+                            ACTIVE_FILE_TRANSFERS[tid].update({
+                                "transferred": transferred,
+                                "percent": pct,
+                                "speed_mb": speed
+                            })
+
+                if ACTIVE_FILE_TRANSFERS[tid].get("cancel_requested"):
+                    if os.path.exists(part_path):
+                        try: os.remove(part_path)
+                        except Exception: pass
+                    ACTIVE_FILE_TRANSFERS[tid]["status"] = "cancelled"
+                    ACTIVE_FILE_TRANSFERS[tid]["message"] = "Transfer cancelled by user"
+                    log_server_event(f"Cancelled transfer of '{safe_filename}'", "INFO")
+                    return
+
+                if os.path.exists(part_path):
+                    if os.path.exists(save_path):
+                        try: os.remove(save_path)
+                        except Exception: pass
+                    os.rename(part_path, save_path)
+
+                ACTIVE_FILE_TRANSFERS[tid].update({
+                    "transferred": transferred,
+                    "total": total_bytes or transferred,
+                    "percent": 100.0,
+                    "status": "completed",
+                    "message": f"Saved as {safe_filename}",
+                    "saved_path": save_path
+                })
+                log_server_event(f"Downloaded '{safe_filename}' from phone to {save_path}", "SUCCESS")
+                success = True
+                break
         except Exception:
             continue
-    return {'status': 'error', 'detail': 'Failed to download file from all mobile endpoints'}
+
+    if not success and ACTIVE_FILE_TRANSFERS[tid].get("status") != "cancelled":
+        if os.path.exists(part_path):
+            try: os.remove(part_path)
+            except Exception: pass
+        ACTIVE_FILE_TRANSFERS[tid]["status"] = "error"
+        ACTIVE_FILE_TRANSFERS[tid]["message"] = "Failed to download file from all mobile endpoints"
+
+def _run_phone_upload_worker(tid: str, ip: str, file_path: str):
+    if not os.path.exists(file_path):
+        ACTIVE_FILE_TRANSFERS[tid] = {"id": tid, "status": "error", "message": "Local file not found"}
+        return
+
+    file_size = os.path.getsize(file_path)
+    file_name = os.path.basename(file_path)
+    target_host = ip if ip and ip.strip() else "127.0.0.1"
+    if ":" not in target_host:
+        target_host = f"{target_host}:5056"
+
+    ACTIVE_FILE_TRANSFERS[tid] = {
+        "id": tid,
+        "filename": file_name,
+        "direction": "PC ➔ Phone",
+        "transferred": 0,
+        "total": file_size,
+        "percent": 0.0,
+        "speed_mb": 0.0,
+        "status": "in_progress",
+        "message": "Uploading to Phone Downloads/RemotePC...",
+        "saved_path": "",
+        "cancel_requested": False
+    }
+
+    import urllib.parse
+    import urllib.request
+
+    encoded_name = urllib.parse.quote(file_name)
+    upload_url = f"http://{target_host}/storage/upload?filename={encoded_name}"
+
+    try:
+        class ProgressStream:
+            def __init__(self, path, tid_val, total_len):
+                self.f = open(path, 'rb')
+                self.tid = tid_val
+                self.total = total_len
+                self.transferred = 0
+                self.last_time = time.time()
+                self.last_bytes = 0
+
+            def read(self, size=-1):
+                if ACTIVE_FILE_TRANSFERS.get(self.tid, {}).get("cancel_requested"):
+                    raise Exception("Transfer cancelled by user")
+                chunk = self.f.read(64 * 1024 if size < 0 or size > 64 * 1024 else size)
+                if chunk:
+                    self.transferred += len(chunk)
+                    now = time.time()
+                    dt = now - self.last_time
+                    if dt >= 0.2:
+                        speed = round(((self.transferred - self.last_bytes) / (1024 * 1024)) / dt, 2)
+                        self.last_bytes = self.transferred
+                        self.last_time = now
+                        pct = round((self.transferred / self.total) * 100, 1) if self.total > 0 else 0.0
+                        ACTIVE_FILE_TRANSFERS[self.tid].update({
+                            "transferred": self.transferred,
+                            "percent": pct,
+                            "speed_mb": speed
+                        })
+                return chunk
+
+            def __len__(self):
+                return self.total
+
+            def close(self):
+                self.f.close()
+
+        streamer = ProgressStream(file_path, tid, file_size)
+        try:
+            req = urllib.request.Request(
+                upload_url,
+                data=streamer,
+                headers={"Content-Length": str(file_size), "Content-Type": "application/octet-stream"},
+                method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=120.0) as resp:
+                resp.read()
+            ACTIVE_FILE_TRANSFERS[tid].update({
+                "transferred": file_size,
+                "percent": 100.0,
+                "status": "completed",
+                "message": f"Sent {file_name} to Phone Downloads/RemotePC"
+            })
+            log_server_event(f"Sent '{file_name}' to Phone Downloads/RemotePC", "SUCCESS")
+        finally:
+            streamer.close()
+    except Exception as e:
+        if ACTIVE_FILE_TRANSFERS.get(tid, {}).get("cancel_requested"):
+            ACTIVE_FILE_TRANSFERS[tid]["status"] = "cancelled"
+            ACTIVE_FILE_TRANSFERS[tid]["message"] = "Upload cancelled by user"
+        else:
+            ACTIVE_FILE_TRANSFERS[tid]["status"] = "error"
+            ACTIVE_FILE_TRANSFERS[tid]["message"] = f"Upload failed: {str(e)}"
+
+@app.post('/phone/storage/download')
+def download_file_from_phone(
+    ip: str = Query(default=""),
+    file_id: str = Query(...),
+    file_type: str = Query(default="image"),
+    filename: str = Query(default="file"),
+    transfer_id: str | None = Query(default=None)
+) -> dict:
+    tid = transfer_id or str(uuid.uuid4())
+    _run_phone_download_worker(tid, ip, file_id, file_type, filename)
+    info = ACTIVE_FILE_TRANSFERS.get(tid, {})
+    if info.get("status") == "completed":
+        return {'status': 'ok', 'saved_path': info.get('saved_path'), 'filename': info.get('filename'), 'transfer_id': tid}
+    elif info.get("status") == "cancelled":
+        return {'status': 'cancelled', 'detail': 'Transfer cancelled by user', 'transfer_id': tid}
+    else:
+        return {'status': 'error', 'detail': info.get('message', 'Failed to download file'), 'transfer_id': tid}
+
+@app.post('/transfer/start-phone-download')
+def start_phone_download_async(
+    ip: str = Query(default=""),
+    file_id: str = Query(...),
+    file_type: str = Query(default="image"),
+    filename: str = Query(default="file")
+) -> dict:
+    tid = str(uuid.uuid4())
+    threading.Thread(target=_run_phone_download_worker, args=(tid, ip, file_id, file_type, filename), daemon=True).start()
+    return {'status': 'ok', 'transfer_id': tid, 'filename': filename}
+
+@app.post('/transfer/start-phone-upload')
+def start_phone_upload_async(
+    ip: str = Query(default=""),
+    file_path: str = Query(...)
+) -> dict:
+    tid = str(uuid.uuid4())
+    threading.Thread(target=_run_phone_upload_worker, args=(tid, ip, file_path), daemon=True).start()
+    return {'status': 'ok', 'transfer_id': tid, 'filename': os.path.basename(file_path)}
+
+@app.get('/transfer/status/{transfer_id}')
+def get_transfer_status(transfer_id: str) -> dict:
+    info = ACTIVE_FILE_TRANSFERS.get(transfer_id)
+    if not info:
+        return {'status': 'not_found', 'id': transfer_id}
+    return info
+
+@app.post('/transfer/cancel/{transfer_id}')
+def cancel_transfer(transfer_id: str) -> dict:
+    info = ACTIVE_FILE_TRANSFERS.get(transfer_id)
+    if info:
+        info["cancel_requested"] = True
+        return {'status': 'ok', 'message': 'Cancellation requested'}
+    return {'status': 'not_found', 'id': transfer_id}
 
 @app.get('/system/stats')
 def get_system_stats():

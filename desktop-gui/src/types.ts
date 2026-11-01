@@ -23,6 +23,30 @@ export interface ServerStatus {
   }>;
   is_configured?: boolean;
   strict_auto_connect?: boolean;
+  active_streams?: ActiveLiveStream[];
+}
+
+export interface ActiveLiveStream {
+  id: string;
+  path: string;
+  filename: string;
+  client?: string;
+  started_at?: number;
+  last_active?: number;
+  type?: string;
+}
+
+export interface FileTransferState {
+  id: string;
+  filename: string;
+  direction: string;
+  transferred: number;
+  total: number;
+  percent: number;
+  speed_mb: number;
+  status: 'in_progress' | 'completed' | 'cancelled' | 'error' | 'not_found';
+  message?: string;
+  saved_path?: string;
 }
 
 export interface SystemStats {
@@ -48,9 +72,15 @@ export interface TrustedDevice {
 export interface PhoneFileItem {
   id: number;
   name: string;
-  type: 'image' | 'video' | 'audio' | 'download' | 'file';
+  type: string;
+  app_type?: string;
+  is_app?: boolean;
+  has_thumbnail?: boolean;
+  path?: string;
+  is_dir?: boolean;
   size: number;
-  date: number;
+  date?: number;
+  is_live?: boolean;
 }
 
 export interface PairingRequest {

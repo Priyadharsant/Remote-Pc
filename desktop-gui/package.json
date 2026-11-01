@@ -1,7 +1,7 @@
 {
   "name": "desktop-gui",
   "productName": "Remote PC GUI",
-  "version": "3.4.0",
+  "version": "3.5.0",
   "description": "Remote PC Control Suite & Wireless Server GUI",
   "author": "Priyan <priyan@remotepc.local>",
   "homepage": "https://github.com/priyan/Remote-Pc",

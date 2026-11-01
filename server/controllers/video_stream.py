@@ -27,6 +27,14 @@ DOC_EXTENSIONS = {
 ARCHIVE_EXTENSIONS = {
     '.zip', '.rar', '.7z', '.tar', '.gz', '.bz2', '.iso'
 }
+APP_EXTENSIONS = {
+    # Android Apps
+    '.apk', '.aab', '.xapk', '.apks',
+    # Windows Apps
+    '.exe', '.msi',
+    # Ubuntu / Linux Apps
+    '.deb', '.appimage', '.desktop'
+}
 
 def get_drives() -> List[Dict[str, Any]]:
     """Returns available logical drives on Windows, or root on POSIX."""
@@ -67,7 +75,19 @@ def get_file_info(entry: os.DirEntry) -> Dict[str, Any]:
     dot_idx = name.rfind('.')
     ext = name[dot_idx:].lower() if dot_idx != -1 else ''
 
-    if ext in VIDEO_EXTENSIONS:
+    app_type = None
+    if ext in APP_EXTENSIONS:
+        file_type = "app"
+        is_vid, is_aud, is_img = False, False, False
+        if ext in ('.apk', '.aab', '.xapk', '.apks'):
+            app_type = "apk"
+        elif ext in ('.exe', '.msi'):
+            app_type = "exe"
+        elif ext in ('.deb', '.appimage', '.desktop'):
+            app_type = "ubt"
+        else:
+            app_type = "app"
+    elif ext in VIDEO_EXTENSIONS:
         file_type = "video"
         is_vid, is_aud, is_img = True, False, False
     elif ext in AUDIO_EXTENSIONS:
@@ -91,14 +111,18 @@ def get_file_info(entry: os.DirEntry) -> Dict[str, Any]:
     except OSError:
         size = 0
 
+    has_thumb = (ext in IMAGE_EXTENSIONS) or (ext in APP_EXTENSIONS)
     return {
         "name": name,
         "path": entry.path,
         "is_dir": False,
         "file_type": file_type,
+        "app_type": app_type,
+        "is_app": bool(app_type),
         "is_video": is_vid,
         "is_audio": is_aud,
         "is_image": is_img,
+        "has_thumbnail": has_thumb,
         "size": size,
         "ext": ext.lstrip('.')
     }
@@ -312,12 +336,13 @@ def open_media_on_pc(stream_url: str) -> bool:
     is_image = any(img_ext in lower_url for img_ext in ('type=image', '.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp', '.svg'))
     is_doc = any(doc_ext in lower_url for doc_ext in ('type=document', '.pdf', '.txt', '.doc', '.docx', '.csv', '.json', '.xml'))
 
-    # 1. For video or audio: Prioritize VLC for smooth HTTP range-streaming
+    # 1. For video or audio: Prioritize VLC or MPV for smooth HTTP range-streaming
     if not is_image and not is_doc:
         vlc_paths = [
             r"C:\Program Files\VideoLAN\VLC\vlc.exe",
             r"C:\Program Files (x86)\VideoLAN\VLC\vlc.exe",
-            shutil.which("vlc")
+            shutil.which("vlc"),
+            shutil.which("mpv")
         ]
         for vlc in vlc_paths:
             if vlc and os.path.exists(vlc):
@@ -329,18 +354,19 @@ def open_media_on_pc(stream_url: str) -> bool:
                     pass
 
         # Try Windows Media Player
-        wmp_paths = [
-            r"C:\Program Files\Windows Media Player\wmplayer.exe",
-            r"C:\Program Files (x86)\Windows Media Player\wmplayer.exe"
-        ]
-        for wmp in wmp_paths:
-            if wmp and os.path.exists(wmp):
-                try:
-                    creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-                    subprocess.Popen([wmp, stream_url], creationflags=creation_flags)
-                    return True
-                except Exception:
-                    pass
+        if sys.platform == 'win32':
+            wmp_paths = [
+                r"C:\Program Files\Windows Media Player\wmplayer.exe",
+                r"C:\Program Files (x86)\Windows Media Player\wmplayer.exe"
+            ]
+            for wmp in wmp_paths:
+                if wmp and os.path.exists(wmp):
+                    try:
+                        creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+                        subprocess.Popen([wmp, stream_url], creationflags=creation_flags)
+                        return True
+                    except Exception:
+                        pass
 
     # 2. For images, documents, or fallback for media: Open directly in default browser or viewer
     try:
@@ -349,34 +375,57 @@ def open_media_on_pc(stream_url: str) -> bool:
     except Exception:
         pass
 
-    try:
-        os.startfile(stream_url)
-        return True
-    except Exception:
-        pass
+    if sys.platform == 'win32':
+        try:
+            os.startfile(stream_url)
+            return True
+        except Exception:
+            pass
 
-    try:
-        creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
-        subprocess.Popen(
-            ["powershell", "-NoProfile", "-c", f"Start-Process '{stream_url}'"],
-            creationflags=creation_flags
-        )
-        return True
-    except Exception:
+        try:
+            creation_flags = subprocess.CREATE_NO_WINDOW
+            subprocess.Popen(
+                ["powershell", "-NoProfile", "-c", f"Start-Process '{stream_url}'"],
+                creationflags=creation_flags
+            )
+            return True
+        except Exception:
+            return False
+    else:
+        for cmd in ['xdg-open', 'gio']:
+            if shutil.which(cmd):
+                try:
+                    args = ['gio', 'open', stream_url] if cmd == 'gio' else ['xdg-open', stream_url]
+                    subprocess.Popen(args)
+                    return True
+                except Exception:
+                    pass
         return False
 
 def open_file_on_pc(file_path: str) -> bool:
-    """Opens a file with its default registered program on Windows."""
+    """Opens a file with its default registered program on Windows or Linux."""
     if not os.path.exists(file_path):
         return False
-    try:
-        os.startfile(file_path)
-        return True
-    except Exception:
-        pass
-    try:
-        subprocess.Popen(["powershell", "-c", f"Start-Process '{file_path}'"], shell=True)
-        return True
-    except Exception:
+
+    if sys.platform == 'win32':
+        try:
+            os.startfile(file_path)
+            return True
+        except Exception:
+            pass
+        try:
+            subprocess.Popen(["powershell", "-c", f"Start-Process '{file_path}'"], shell=True)
+            return True
+        except Exception:
+            return False
+    else:
+        for cmd in ['xdg-open', 'gio']:
+            if shutil.which(cmd):
+                try:
+                    args = ['gio', 'open', file_path] if cmd == 'gio' else ['xdg-open', file_path]
+                    subprocess.Popen(args)
+                    return True
+                except Exception:
+                    pass
         return False
 

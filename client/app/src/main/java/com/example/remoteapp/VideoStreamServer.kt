@@ -37,6 +37,8 @@ class VideoStreamServer(
     companion object {
         private const val TAG = "VideoStreamServer"
         private var instance: VideoStreamServer? = null
+        @Volatile var activeStreamingId: Long? = null
+        @Volatile var activeStreamingTime: Long = 0L
 
         @Synchronized
         fun startServer(
@@ -229,6 +231,8 @@ class VideoStreamServer(
                                 obj.put("type", typeTag)
                                 obj.put("size", size)
                                 obj.put("date", date)
+                                val isLive = (id == activeStreamingId) && (System.currentTimeMillis() - activeStreamingTime < 15000L)
+                                obj.put("is_live", isLive)
                                 jsonArray.put(obj)
                                 count++
                             }
@@ -242,7 +246,7 @@ class VideoStreamServer(
                 if ((cat == "downloads" || cat == "all") && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     queryFolder(MediaStore.Downloads.EXTERNAL_CONTENT_URI, "download")
                 }
-                if (cat == "documents" || cat == "all" || cat == "doc") {
+                if (cat == "documents" || cat == "all" || cat == "doc" || cat == "apps" || cat == "app") {
                     try {
                         val filesUri = MediaStore.Files.getContentUri("external")
                         val cursor = resolver.query(filesUri, proj, null, null, "${MediaStore.MediaColumns.DATE_MODIFIED} DESC")
@@ -255,16 +259,28 @@ class VideoStreamServer(
                             while (c.moveToNext() && count < 80) {
                                 val name = if (nameCol >= 0) c.getString(nameCol) ?: "" else ""
                                 val lower = name.lowercase(Locale.ROOT)
-                                if (lower.endsWith(".pdf") || lower.endsWith(".docx") || lower.endsWith(".doc") ||
+                                val isApk = lower.endsWith(".apk") || lower.endsWith(".aab") || lower.endsWith(".xapk")
+                                val isExe = lower.endsWith(".exe") || lower.endsWith(".msi")
+                                val isUbt = lower.endsWith(".deb") || lower.endsWith(".appimage") || lower.endsWith(".desktop")
+                                val isApp = isApk || isExe || isUbt
+                                val isDoc = lower.endsWith(".pdf") || lower.endsWith(".docx") || lower.endsWith(".doc") ||
                                     lower.endsWith(".txt") || lower.endsWith(".xlsx") || lower.endsWith(".pptx") ||
-                                    lower.endsWith(".zip") || lower.endsWith(".apk")) {
+                                    lower.endsWith(".zip")
+
+                                val include = if (cat == "apps" || cat == "app") isApp else if (cat == "documents" || cat == "doc") isDoc else (isApp || isDoc)
+                                if (include) {
                                     val id = if (idCol >= 0) c.getLong(idCol) else 0L
                                     val size = if (sizeCol >= 0) c.getLong(sizeCol) else 0L
                                     val date = if (dateCol >= 0) c.getLong(dateCol) else 0L
                                     val obj = JSONObject().apply {
                                         put("id", id)
                                         put("name", name)
-                                        put("type", "document")
+                                        put("type", if (isApp) "app" else "document")
+                                        if (isApp) {
+                                            put("is_app", true)
+                                            put("app_type", if (isApk) "apk" else if (isExe) "exe" else "ubt")
+                                            put("has_thumbnail", true)
+                                        }
                                         put("size", size)
                                         put("date", date)
                                     }
@@ -280,6 +296,32 @@ class VideoStreamServer(
                 root.put("status", "ok")
                 root.put("files", jsonArray)
                 sendJsonResponse(out, root.toString())
+                return
+            } else if (uri.startsWith("/storage/thumbnail")) {
+                val idStr = uri.substringAfter("id=", "").substringBefore("&")
+                val type = uri.substringAfter("type=", "image").substringBefore("&")
+                val fId = idStr.toLongOrNull()
+                if (fId != null) {
+                    try {
+                        val targetUri = when (type) {
+                            "video" -> ContentUris.withAppendedId(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, fId)
+                            "image" -> ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, fId)
+                            else -> ContentUris.withAppendedId(MediaStore.Files.getContentUri("external"), fId)
+                        }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                            val bitmap = resolver.loadThumbnail(targetUri, android.util.Size(128, 128), null)
+                            val bos = ByteArrayOutputStream()
+                            bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 85, bos)
+                            val bytes = bos.toByteArray()
+                            out.write("HTTP/1.1 200 OK\r\nContent-Type: image/png\r\nContent-Length: ${bytes.size}\r\nConnection: close\r\n\r\n".toByteArray())
+                            out.write(bytes)
+                            out.flush()
+                            return
+                        }
+                    } catch (_: Exception) {}
+                }
+                out.write("HTTP/1.1 404 Not Found\r\n\r\n".toByteArray())
+                out.flush()
                 return
             } else if (uri.startsWith("/storage/file")) {
                 val idStr = uri.substringAfter("id=", "").substringBefore("&")
@@ -351,6 +393,9 @@ class VideoStreamServer(
 
             val totalLength = pfd.statSize
             pfd.close()
+
+            activeStreamingId = videoId
+            activeStreamingTime = System.currentTimeMillis()
 
             if (rangeHeader != null && rangeHeader.startsWith("bytes=")) {
                 var rangeFrom = 0L

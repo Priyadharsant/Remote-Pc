@@ -119,6 +119,34 @@ export const api = {
     }
   },
 
+  async getPcDrives(): Promise<{ drives: string[]; shortcuts: { name: string; path: string }[] }> {
+    try {
+      const res = await fetch(`${BASE_URL}/fs/drives`);
+      if (!res.ok) return { drives: [], shortcuts: [] };
+      return res.json();
+    } catch {
+      return { drives: [], shortcuts: [] };
+    }
+  },
+
+  async getPcFiles(folderPath = ''): Promise<{ current_path: string; parent_path: string | null; items: any[] }> {
+    try {
+      const res = await fetch(`${BASE_URL}/fs/list?path=${encodeURIComponent(folderPath)}`);
+      if (!res.ok) return { current_path: '', parent_path: null, items: [] };
+      return res.json();
+    } catch {
+      return { current_path: '', parent_path: null, items: [] };
+    }
+  },
+
+  getPcThumbnailUrl(filePath: string): string {
+    return `${BASE_URL}/fs/thumbnail?path=${encodeURIComponent(filePath)}`;
+  },
+
+  getPhoneThumbnailUrl(phoneIp: string, fileId: number, fileType: string, filename: string): string {
+    return `${BASE_URL}/phone/storage/thumbnail?ip=${encodeURIComponent(phoneIp)}&file_id=${fileId}&file_type=${encodeURIComponent(fileType)}&filename=${encodeURIComponent(filename)}`;
+  },
+
   async downloadPhoneFile(phoneIp: string, fileId: number, fileType: string, filename: string): Promise<string | null> {
     const res = await fetch(`${BASE_URL}/phone/storage/download?ip=${encodeURIComponent(phoneIp)}&file_id=${fileId}&file_type=${encodeURIComponent(fileType)}&filename=${encodeURIComponent(filename)}`, {
       method: 'POST'
@@ -126,6 +154,75 @@ export const api = {
     if (!res.ok) return null;
     const data = await res.json();
     return data.saved_path || null;
+  },
+
+  async startPhoneDownload(phoneIp: string, fileId: number, fileType: string, filename: string): Promise<string | null> {
+    try {
+      const res = await fetch(`${BASE_URL}/transfer/start-phone-download?ip=${encodeURIComponent(phoneIp)}&file_id=${fileId}&file_type=${encodeURIComponent(fileType)}&filename=${encodeURIComponent(filename)}`, {
+        method: 'POST'
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.transfer_id || null;
+    } catch {
+      return null;
+    }
+  },
+
+  async startPhoneUpload(phoneIp: string, filePath: string): Promise<string | null> {
+    try {
+      const res = await fetch(`${BASE_URL}/transfer/start-phone-upload?ip=${encodeURIComponent(phoneIp)}&file_path=${encodeURIComponent(filePath)}`, {
+        method: 'POST'
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return data.transfer_id || null;
+    } catch {
+      return null;
+    }
+  },
+
+  async getTransferStatus(transferId: string): Promise<any | null> {
+    try {
+      const res = await fetch(`${BASE_URL}/transfer/status/${encodeURIComponent(transferId)}`);
+      if (!res.ok) return null;
+      return res.json();
+    } catch {
+      return null;
+    }
+  },
+
+  async cancelTransfer(transferId: string): Promise<boolean> {
+    try {
+      const res = await fetch(`${BASE_URL}/transfer/cancel/${encodeURIComponent(transferId)}`, {
+        method: 'POST'
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  },
+
+  async getActiveLiveStreams(): Promise<any[]> {
+    try {
+      const res = await fetch(`${BASE_URL}/fs/active-streams`);
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.active_streams || [];
+    } catch {
+      return [];
+    }
+  },
+
+  async stopLiveStream(pathOrId: string): Promise<boolean> {
+    try {
+      const res = await fetch(`${BASE_URL}/fs/stream/stop?id=${encodeURIComponent(pathOrId)}&path=${encodeURIComponent(pathOrId)}`, {
+        method: 'POST'
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
   },
 
   getFilePreviewUrl(phoneIp: string, fileId: number, fileType: string, filename: string): string {

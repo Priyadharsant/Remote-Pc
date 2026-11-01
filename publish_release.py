@@ -112,7 +112,7 @@ def detect_version() -> str:
             ver = m.group(1).strip()
             return f"v{ver}" if not ver.startswith("v") else ver
 
-    return "v3.4.0"
+    return "v3.5.0"
 
 def build_artifacts():
     print("\n" + "=" * 65)
