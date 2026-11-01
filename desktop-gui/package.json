@@ -32,6 +32,16 @@
       "electron/**/*",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "../Remote_Server",
+        "to": "Remote_Server"
+      },
+      {
+        "from": "../server",
+        "to": "server"
+      }
+    ],
     "win": {
       "icon": "../server/logo.ico",
       "target": [

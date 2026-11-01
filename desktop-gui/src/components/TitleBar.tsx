@@ -41,18 +41,34 @@ export const TitleBar: React.FC<TitleBarProps> = ({
 
   const handleStartServer = async () => {
     setIsStartingServer(true);
-    if (window.electronAPI?.startServer) {
-      await window.electronAPI.startServer();
+    try {
+      if (window.electronAPI?.startServer) {
+        const res = await window.electronAPI.startServer();
+        console.log('[TitleBar] startServer result:', res);
+      }
+    } catch (e) {
+      console.error('[TitleBar] startServer error:', e);
     }
-    // Poll for status check
-    const interval = setInterval(() => {
+    // Poll for status check every 500ms
+    let attempts = 0;
+    const interval = setInterval(async () => {
+      attempts++;
       onRefresh?.();
-    }, 1000);
-    setTimeout(() => {
-      clearInterval(interval);
-      setIsStartingServer(false);
-      onRefresh?.();
-    }, 4500);
+      try {
+        const res = await fetch('http://127.0.0.1:5055/status');
+        if (res.ok) {
+          clearInterval(interval);
+          setIsStartingServer(false);
+          onRefresh?.();
+          return;
+        }
+      } catch (_) {}
+      if (attempts >= 12) {
+        clearInterval(interval);
+        setIsStartingServer(false);
+        onRefresh?.();
+      }
+    }, 500);
   };
 
   return (

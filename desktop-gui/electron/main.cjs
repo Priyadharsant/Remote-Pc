@@ -626,97 +626,112 @@ ipcMain.handle('download-and-install-update', async (event, { url, version }) =>
   }
 });
 
+function launchCoreServer() {
+  return new Promise((resolve) => {
+    const req = http.get('http://127.0.0.1:5055/status', (res) => {
+      if (res.statusCode === 200) {
+        console.log('[CoreServer] Server is already running on port 5055');
+        return resolve({ success: true, message: 'Server is already running' });
+      }
+    });
+    req.on('error', () => {
+      console.log('[CoreServer] Server not active on 5055. Discovering and launching...');
+      const isWin = process.platform === 'win32';
+      const binaryNames = isWin ? ['Remote_Server.exe'] : ['Remote_Server', 'Remote_Server.bin', 'Remote_Server.exe'];
+
+      const execDir = path.dirname(process.execPath);
+      const appPath = app.getAppPath();
+      const homedir = os.homedir();
+
+      const searchDirs = [
+        execDir,
+        path.join(execDir, 'resources'),
+        path.join(execDir, '..'),
+        path.join(execDir, '..', '..'),
+        process.resourcesPath,
+        path.join(appPath, '..'),
+        path.join(appPath, '..', '..'),
+        path.join(homedir, '.local', 'share', 'remote-pc'),
+        path.join(homedir, '.local', 'bin'),
+        '/opt/Remote PC GUI',
+        '/opt/Remote PC GUI/resources',
+        '/usr/local/bin',
+        process.cwd(),
+        path.join(process.cwd(), 'server'),
+        path.join(__dirname, '../..'),
+        path.join(__dirname, '../../server')
+      ];
+
+      for (const dir of searchDirs) {
+        for (const bName of binaryNames) {
+          const sPath = path.join(dir, bName);
+          if (fs.existsSync(sPath)) {
+            try {
+              if (!isWin) {
+                try { fs.chmodSync(sPath, 0o755); } catch (_) {}
+              }
+              const cwd = path.dirname(sPath);
+              console.log('[CoreServer] Spawning binary:', sPath, 'cwd:', cwd);
+              const child = spawn(sPath, [], {
+                detached: true,
+                stdio: 'ignore',
+                cwd: cwd,
+                env: { ...process.env, DISPLAY: process.env.DISPLAY || ':0' }
+              });
+              child.unref();
+              return resolve({ success: true, path: sPath });
+            } catch (err) {
+              console.error('[CoreServer] Error launching binary:', sPath, err);
+            }
+          }
+        }
+      }
+
+      // Fallback: spawn python script
+      const scriptCandidates = [
+        path.join(execDir, 'server', 'Remote_Server.py'),
+        path.join(execDir, '..', '..', 'server', 'Remote_Server.py'),
+        path.join(homedir, '.local', 'share', 'remote-pc', 'server', 'Remote_Server.py'),
+        path.join(process.cwd(), 'server', 'Remote_Server.py'),
+        path.join(__dirname, '../../server/Remote_Server.py'),
+        path.join(appPath, 'server', 'Remote_Server.py'),
+        path.join(process.resourcesPath, 'server', 'Remote_Server.py')
+      ];
+      const pythonCmds = isWin ? ['python', 'py'] : ['python3', 'python'];
+      for (const pyPath of scriptCandidates) {
+        if (fs.existsSync(pyPath)) {
+          for (const py of pythonCmds) {
+            try {
+              const cwd = path.dirname(path.dirname(pyPath));
+              console.log(`[CoreServer] Spawning via ${py}:`, pyPath, 'cwd:', cwd);
+              const child = spawn(py, [pyPath], {
+                detached: true,
+                stdio: 'ignore',
+                cwd: cwd,
+                env: { ...process.env, DISPLAY: process.env.DISPLAY || ':0' }
+              });
+              child.unref();
+              return resolve({ success: true, path: pyPath });
+            } catch (_) {}
+          }
+        }
+      }
+
+      console.error('[CoreServer] Could not find Remote_Server executable or python script');
+      return resolve({ success: false, error: 'Could not find Remote_Server binary or Remote_Server.py' });
+    });
+    req.setTimeout(1200, () => {
+      req.destroy();
+    });
+  });
+}
+
 ipcMain.handle('server:start', async () => {
-  try {
-    const isWin = process.platform === 'win32';
-    const binaryNames = isWin ? ['Remote_Server.exe'] : ['Remote_Server', 'Remote_Server.bin', 'Remote_Server.exe'];
-    const searchDirs = [
-      path.join(app.getAppPath(), '..'),
-      process.resourcesPath,
-      path.join(__dirname, '../..'),
-      path.join(__dirname, '../../server'),
-      process.cwd(),
-      path.join(process.cwd(), 'server')
-    ];
-
-    for (const dir of searchDirs) {
-      for (const bName of binaryNames) {
-        const sPath = path.join(dir, bName);
-        if (fs.existsSync(sPath)) {
-          console.log('Launching Core Server executable:', sPath);
-          spawn(sPath, [], { detached: true, stdio: 'ignore' }).unref();
-          return { success: true };
-        }
-      }
-    }
-
-    // Fallback: spawn python script
-    const scriptCandidates = [
-      path.join(__dirname, '../../server/Remote_Server.py'),
-      path.join(process.cwd(), 'server', 'Remote_Server.py'),
-      path.join(app.getAppPath(), 'server', 'Remote_Server.py')
-    ];
-    const pythonCmds = isWin ? ['python', 'py'] : ['python3', 'python'];
-    for (const pyPath of scriptCandidates) {
-      if (fs.existsSync(pyPath)) {
-        for (const py of pythonCmds) {
-          try {
-            console.log(`Launching Core Server via ${py}:`, pyPath);
-            spawn(py, [pyPath], { detached: true, stdio: 'ignore' }).unref();
-            return { success: true };
-          } catch (_) {}
-        }
-      }
-    }
-    return { success: false, error: 'Could not find Remote_Server binary or Remote_Server.py' };
-  } catch (e) {
-    return { success: false, error: e.message };
-  }
+  return await launchCoreServer();
 });
 
 function ensureServerRunning() {
-  const req = http.get('http://127.0.0.1:5055/status', (res) => {
-    if (res.statusCode === 200) {
-      console.log('Remote_Server is already running');
-    }
-  });
-  req.on('error', () => {
-    console.log('Remote_Server is not running. Launching...');
-    const isWin = process.platform === 'win32';
-    const binaryNames = isWin ? ['Remote_Server.exe'] : ['Remote_Server', 'Remote_Server.bin', 'Remote_Server.exe'];
-    const searchDirs = [
-      path.join(app.getAppPath(), '..'),
-      process.resourcesPath,
-      path.join(__dirname, '../..'),
-      path.join(__dirname, '../../server'),
-      process.cwd(),
-      path.join(process.cwd(), 'server')
-    ];
-
-    for (const dir of searchDirs) {
-      for (const bName of binaryNames) {
-        const sPath = path.join(dir, bName);
-        if (fs.existsSync(sPath)) {
-          spawn(sPath, [], { detached: true, stdio: 'ignore' }).unref();
-          return;
-        }
-      }
-    }
-
-    // Fallback: spawn python script
-    const scriptCandidates = [
-      path.join(__dirname, '../../server/Remote_Server.py'),
-      path.join(process.cwd(), 'server', 'Remote_Server.py'),
-      path.join(app.getAppPath(), 'server', 'Remote_Server.py')
-    ];
-    const pythonCmd = isWin ? 'python' : 'python3';
-    for (const pyPath of scriptCandidates) {
-      if (fs.existsSync(pyPath)) {
-        spawn(pythonCmd, [pyPath], { detached: true, stdio: 'ignore' }).unref();
-        break;
-      }
-    }
-  });
+  launchCoreServer();
 }
 
 app.name = 'Remote PC GUI';

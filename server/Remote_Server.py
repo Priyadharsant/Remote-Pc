@@ -83,9 +83,34 @@ app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 BASE_DIR = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
 RESOURCE_DIR = getattr(sys, '_MEIPASS', BASE_DIR)
-CONFIG_FILE = os.path.join(BASE_DIR, 'config.json')
-ICON_FILE = os.path.join(RESOURCE_DIR, 'logo.ico')
-LOG_FILE = os.path.join(BASE_DIR, 'Remote_Server.log')
+
+def _get_data_dir() -> str:
+    try:
+        test_file = os.path.join(BASE_DIR, '.write_test')
+        with open(test_file, 'w') as f:
+            f.write('1')
+        os.remove(test_file)
+        if not BASE_DIR.startswith(('/opt', '/usr')):
+            return BASE_DIR
+    except Exception:
+        pass
+    user_dir = os.path.expanduser('~/.config/remote-pc') if sys.platform != 'win32' else os.path.join(os.environ.get('APPDATA', BASE_DIR), 'Remote-Pc')
+    os.makedirs(user_dir, exist_ok=True)
+    return user_dir
+
+DATA_DIR = _get_data_dir()
+CONFIG_FILE = os.path.join(DATA_DIR, 'config.json')
+if not os.path.exists(CONFIG_FILE):
+    base_cfg = os.path.join(BASE_DIR, 'config.json')
+    if os.path.exists(base_cfg):
+        try:
+            import shutil
+            shutil.copy2(base_cfg, CONFIG_FILE)
+        except Exception:
+            pass
+
+ICON_FILE = os.path.join(RESOURCE_DIR, 'logo.ico' if sys.platform == 'win32' else 'logo.png')
+LOG_FILE = os.path.join(DATA_DIR, 'Remote_Server.log')
 
 HOST = '0.0.0.0'
 PORT = 5055
@@ -98,11 +123,17 @@ PRESENCE_INTERVAL_SECONDS = 10
 PASSWORD_HASH_ITERATIONS = 260000
 
 def setup_crash_logging() -> None:
-    logging.basicConfig(
-        filename=LOG_FILE,
-        level=logging.ERROR,
-        format='%(asctime)s %(levelname)s %(message)s',
-    )
+    try:
+        logging.basicConfig(
+            filename=LOG_FILE,
+            level=logging.ERROR,
+            format='%(asctime)s %(levelname)s %(message)s',
+        )
+    except Exception:
+        logging.basicConfig(
+            level=logging.ERROR,
+            format='%(asctime)s %(levelname)s %(message)s',
+        )
 
     def log_uncaught_exception(exc_type, exc_value, exc_traceback):
         logging.critical('Uncaught exception', exc_info=(exc_type, exc_value, exc_traceback))
