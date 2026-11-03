@@ -15,7 +15,13 @@ import fs from "fs";
 import path from "path";
 import https from "https";
 import crypto from "crypto";
+import dns from "dns";
 import { fileURLToPath } from "url";
+
+// Force IPv4 first to avoid IPv6 getaddrinfo ENOTFOUND / ECONNRESET on uploads.github.com
+try {
+  dns.setDefaultResultOrder("ipv4first");
+} catch (_) {}
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..");
@@ -245,10 +251,11 @@ async function main() {
     }
   }
 
+  const isLinux = process.argv.includes("--linux");
   const hasExe = !isApkOnly && fs.existsSync(exePath);
   const hasApk = !isExeOnly && fs.existsSync(apkPath);
-  const hasDeb = !isExeOnly && !isApkOnly && fs.existsSync(debPath);
-  const hasTar = !isExeOnly && !isApkOnly && fs.existsSync(tarPath);
+  const hasDeb = isLinux && fs.existsSync(debPath);
+  const hasTar = isLinux && fs.existsSync(tarPath);
 
   if (!hasExe && !hasApk && !hasDeb && !hasTar) {
     throw new Error("No release binaries found.");
@@ -428,6 +435,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error("❌ Release upload error:", err.message);
+  console.error("❌ Release upload error:", err.message, err.cause || "");
   process.exit(1);
 });
