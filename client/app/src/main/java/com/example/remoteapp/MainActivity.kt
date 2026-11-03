@@ -3374,11 +3374,11 @@ fun DeviceTransferProgressCard(
         modifier = modifier
             .fillMaxWidth()
             .padding(vertical = 6.dp),
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
-        border = BorderStroke(1.5.dp, Color(0xFF38BDF8).copy(alpha = 0.6f))
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = AppTheme.CardDarkElevated),
+        border = BorderStroke(1.dp, Color(0xFF06B6D4).copy(alpha = 0.5f))
     ) {
-        Column(modifier = Modifier.padding(12.dp)) {
+        Column(modifier = Modifier.padding(14.dp)) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -3387,16 +3387,16 @@ fun DeviceTransferProgressCard(
                 Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                     Box(
                         modifier = Modifier
-                            .size(34.dp)
-                            .clip(CircleShape)
-                            .background(Color(0xFF38BDF8).copy(alpha = 0.2f)),
+                            .size(38.dp)
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(Color(0xFF06B6D4).copy(alpha = 0.15f)),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = if (transfer.direction.contains("PC ➔")) Icons.Rounded.Download else Icons.Rounded.Upload,
                             contentDescription = null,
-                            tint = Color(0xFF38BDF8),
-                            modifier = Modifier.size(18.dp)
+                            tint = Color(0xFF06B6D4),
+                            modifier = Modifier.size(20.dp)
                         )
                     }
                     Spacer(Modifier.width(10.dp))
@@ -3405,16 +3405,32 @@ fun DeviceTransferProgressCard(
                             text = transfer.fileName,
                             fontWeight = FontWeight.Bold,
                             fontSize = 13.sp,
-                            color = Color(0xFFF8FAFC),
+                            color = AppTheme.TextPrimary,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        Text(
-                            text = "${transfer.direction} • ⚡ ${transfer.speedFormatted}",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            color = Color(0xFF38BDF8)
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+                            Text(
+                                text = transfer.direction,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = AppTheme.TextMuted
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color(0xFF06B6D4).copy(alpha = 0.15f))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = "⚡ ${transfer.speedFormatted}",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF06B6D4)
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -3423,20 +3439,20 @@ fun DeviceTransferProgressCard(
                 OutlinedButton(
                     onClick = onCancel,
                     colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = Color(0xFFEF4444)
+                        contentColor = Color(0xFFF43F5E)
                     ),
-                    border = BorderStroke(1.dp, Color(0xFFEF4444).copy(alpha = 0.7f)),
-                    shape = RoundedCornerShape(8.dp),
+                    border = BorderStroke(1.dp, Color(0xFFF43F5E).copy(alpha = 0.6f)),
+                    shape = RoundedCornerShape(10.dp),
                     contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                    modifier = Modifier.height(30.dp)
+                    modifier = Modifier.height(32.dp)
                 ) {
-                    Icon(Icons.Rounded.Close, contentDescription = "Cancel", modifier = Modifier.size(14.dp))
+                    Icon(Icons.Rounded.Close, contentDescription = "Cancel", modifier = Modifier.size(13.dp))
                     Spacer(Modifier.width(4.dp))
                     Text("Cancel", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                 }
             }
 
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(12.dp))
 
             LinearProgressIndicator(
                 progress = { (transfer.percent / 100f).coerceIn(0f, 1f) },
@@ -3444,8 +3460,8 @@ fun DeviceTransferProgressCard(
                     .fillMaxWidth()
                     .height(6.dp)
                     .clip(RoundedCornerShape(3.dp)),
-                color = Color(0xFF38BDF8),
-                trackColor = Color(0xFF334155)
+                color = Color(0xFF06B6D4),
+                trackColor = Color(0xFF1E293B)
             )
 
             Spacer(Modifier.height(6.dp))
@@ -3459,13 +3475,13 @@ fun DeviceTransferProgressCard(
                 Text(
                     text = "$transferredStr / $totalStr",
                     fontSize = 11.sp,
-                    color = Color(0xFF94A3B8)
+                    color = AppTheme.TextMuted
                 )
                 Text(
                     text = "${transfer.percent}%",
                     fontSize = 11.sp,
                     fontWeight = FontWeight.Bold,
-                    color = Color(0xFF38BDF8)
+                    color = Color(0xFF06B6D4)
                 )
             }
         }
@@ -4069,10 +4085,10 @@ fun PcFileManagerScreen(
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
-                placeholder = { Text("Search files or extensions...", color = AppTheme.TextMuted, fontSize = 13.sp) },
+                placeholder = { Text("Search files, extensions, apps...", color = AppTheme.TextMuted, fontSize = 13.sp) },
                 singleLine = true,
                 leadingIcon = {
-                    Icon(Icons.Rounded.Search, contentDescription = "Search", tint = AppTheme.AccentCyan)
+                    Icon(Icons.Rounded.Search, contentDescription = "Search", tint = Color(0xFF06B6D4))
                 },
                 trailingIcon = {
                     if (searchQuery.isNotEmpty()) {
@@ -4081,9 +4097,9 @@ fun PcFileManagerScreen(
                         }
                     }
                 },
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(16.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = AppTheme.AccentCyan,
+                    focusedBorderColor = Color(0xFF06B6D4),
                     unfocusedBorderColor = AppTheme.CardBorderSubtle,
                     focusedContainerColor = AppTheme.CardDarkElevated,
                     unfocusedContainerColor = AppTheme.CardDarkElevated,
@@ -4100,7 +4116,7 @@ fun PcFileManagerScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     val categories = listOf(
                         "all" to "All",
@@ -4115,12 +4131,18 @@ fun PcFileManagerScreen(
                         FilterChip(
                             selected = isSelected,
                             onClick = { selectedCategory = catId },
-                            label = { Text(label, fontSize = 11.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal) },
+                            label = { Text(label, fontSize = 11.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold) },
+                            shape = RoundedCornerShape(12.dp),
                             colors = FilterChipDefaults.filterChipColors(
-                                selectedContainerColor = AppTheme.AccentCyan,
-                                selectedLabelColor = AppTheme.BackgroundDark,
+                                selectedContainerColor = Color(0xFF06B6D4),
+                                selectedLabelColor = Color(0xFF0B0F19),
                                 containerColor = AppTheme.CardDarkElevated,
                                 labelColor = AppTheme.TextSecondary
+                            ),
+                            border = FilterChipDefaults.filterChipBorder(
+                                enabled = true,
+                                selected = isSelected,
+                                borderColor = if (isSelected) Color(0xFF06B6D4) else AppTheme.CardBorderSubtle
                             )
                         )
                     }
@@ -4131,7 +4153,7 @@ fun PcFileManagerScreen(
 
             if (isLoading) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = AppTheme.AccentCyan)
+                    CircularProgressIndicator(color = Color(0xFF06B6D4))
                 }
             } else if (currentPath.isEmpty()) {
                 // Drives & Shortcuts View
@@ -4155,8 +4177,8 @@ fun PcFileManagerScreen(
                                 .fillMaxWidth()
                                 .padding(vertical = 4.dp)
                                 .clickable { loadPath(sc.second) },
-                            shape = RoundedCornerShape(14.dp),
-                            colors = CardDefaults.cardColors(containerColor = AppTheme.CardDark),
+                            shape = RoundedCornerShape(18.dp),
+                            colors = CardDefaults.cardColors(containerColor = AppTheme.CardDarkElevated),
                             border = BorderStroke(1.dp, AppTheme.CardBorderSubtle)
                         ) {
                             Row(
@@ -4165,16 +4187,16 @@ fun PcFileManagerScreen(
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(40.dp)
-                                        .clip(CircleShape)
-                                        .background(AppTheme.AccentAmber.copy(alpha = 0.15f)),
+                                        .size(42.dp)
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(Color(0xFFF59E0B).copy(alpha = 0.15f)),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    Icon(icon, contentDescription = null, tint = AppTheme.AccentAmber, modifier = Modifier.size(22.dp))
+                                    Icon(icon, contentDescription = null, tint = Color(0xFFF59E0B), modifier = Modifier.size(22.dp))
                                 }
                                 Spacer(Modifier.width(12.dp))
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(sc.first, fontWeight = FontWeight.SemiBold, color = AppTheme.TextPrimary, fontSize = 14.sp)
+                                    Text(sc.first, fontWeight = FontWeight.Bold, color = AppTheme.TextPrimary, fontSize = 14.sp)
                                     Text(sc.second, fontSize = 11.sp, color = AppTheme.TextMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
                                 Icon(Icons.Rounded.ChevronRight, contentDescription = null, tint = AppTheme.TextMuted)
@@ -4193,8 +4215,8 @@ fun PcFileManagerScreen(
                                 .fillMaxWidth()
                                 .padding(vertical = 4.dp)
                                 .clickable { loadPath(drv) },
-                            shape = RoundedCornerShape(14.dp),
-                            colors = CardDefaults.cardColors(containerColor = AppTheme.CardDark),
+                            shape = RoundedCornerShape(18.dp),
+                            colors = CardDefaults.cardColors(containerColor = AppTheme.CardDarkElevated),
                             border = BorderStroke(1.dp, AppTheme.CardBorderSubtle)
                         ) {
                             Row(
@@ -4203,12 +4225,12 @@ fun PcFileManagerScreen(
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(40.dp)
-                                        .clip(CircleShape)
-                                        .background(AppTheme.AccentCyan.copy(alpha = 0.15f)),
+                                        .size(42.dp)
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(Color(0xFF06B6D4).copy(alpha = 0.15f)),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    Icon(Icons.Rounded.Storage, contentDescription = null, tint = AppTheme.AccentCyan, modifier = Modifier.size(22.dp))
+                                    Icon(Icons.Rounded.Storage, contentDescription = null, tint = Color(0xFF06B6D4), modifier = Modifier.size(22.dp))
                                 }
                                 Spacer(Modifier.width(12.dp))
                                 Column(modifier = Modifier.weight(1f)) {
@@ -4243,21 +4265,21 @@ fun PcFileManagerScreen(
                         val isApp = item.isApp || item.fileType == "app" || item.ext.lowercase() in listOf("apk", "deb", "exe", "msi", "appimage", "desktop", "xapk")
 
                         val (tintColor, iconVector) = when {
-                            item.isDir -> Pair(AppTheme.AccentAmber, Icons.Rounded.Folder)
+                            item.isDir -> Pair(Color(0xFFF59E0B), Icons.Rounded.Folder)
                             isApp -> {
                                 val ext = item.ext.lowercase()
                                 if (ext in listOf("apk", "xapk") || item.appType == "apk") {
-                                    Pair(Color(0xFF22C55E), Icons.Rounded.TouchApp)
+                                    Pair(Color(0xFF10B981), Icons.Rounded.TouchApp)
                                 } else if (ext in listOf("exe", "msi") || item.appType == "exe") {
                                     Pair(Color(0xFF0284C7), Icons.Rounded.Window)
                                 } else {
-                                    Pair(Color(0xFFE95420), Icons.Rounded.DesktopWindows)
+                                    Pair(Color(0xFFF97316), Icons.Rounded.DesktopWindows)
                                 }
                             }
-                            isVideo -> Pair(AppTheme.AccentCyan, Icons.Rounded.VideoFile)
-                            isAudio -> Pair(AppTheme.AccentEmerald, Icons.Rounded.AudioFile)
+                            isVideo -> Pair(Color(0xFF06B6D4), Icons.Rounded.VideoFile)
+                            isAudio -> Pair(Color(0xFF10B981), Icons.Rounded.AudioFile)
                             isImage -> Pair(Color(0xFFEC4899), Icons.Rounded.Image)
-                            isDoc -> Pair(AppTheme.AccentSky, Icons.Rounded.Description)
+                            isDoc -> Pair(Color(0xFF38BDF8), Icons.Rounded.Description)
                             isArchive -> Pair(Color(0xFFFBBF24), Icons.Rounded.Archive)
                             else -> Pair(AppTheme.TextSecondary, Icons.Rounded.InsertDriveFile)
                         }
@@ -4269,38 +4291,46 @@ fun PcFileManagerScreen(
                                 .clickable {
                                     viewFileOnMobile(item)
                                 },
-                            shape = RoundedCornerShape(12.dp),
-                            colors = CardDefaults.cardColors(containerColor = AppTheme.CardDark),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = AppTheme.CardDarkElevated),
                             border = if (item.isLive) BorderStroke(1.5.dp, Color(0xFF10B981)) else BorderStroke(1.dp, AppTheme.CardBorderSubtle)
                         ) {
                             Row(
                                 modifier = Modifier.padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(iconVector, contentDescription = null, tint = tintColor, modifier = Modifier.size(28.dp))
-                                Spacer(Modifier.width(10.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(tintColor.copy(alpha = 0.15f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(iconVector, contentDescription = null, tint = tintColor, modifier = Modifier.size(24.dp))
+                                }
+                                Spacer(Modifier.width(12.dp))
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(item.name, fontWeight = FontWeight.SemiBold, color = AppTheme.TextPrimary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(item.name, fontWeight = FontWeight.Bold, color = AppTheme.TextPrimary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     if (item.isLive) {
                                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
                                             Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(Color(0xFF10B981)))
                                             Spacer(Modifier.width(4.dp))
-                                            Text("LIVE SHARING", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981))
+                                            Text("LIVE SHARING", fontSize = 10.sp, fontWeight = FontWeight.Black, color = Color(0xFF10B981))
                                             Spacer(Modifier.width(6.dp))
                                             Text(
                                                 "${formatFileSize(item.size)} • ${if (item.ext.isNotEmpty()) item.ext.uppercase() else "FILE"}",
                                                 fontSize = 11.sp,
-                                                color = Color(0xFF94A3B8)
+                                                color = AppTheme.TextMuted
                                             )
                                         }
                                     } else if (!item.isDir) {
                                         Text(
                                             "${formatFileSize(item.size)} • ${if (item.ext.isNotEmpty()) item.ext.uppercase() else "FILE"}",
                                             fontSize = 11.sp,
-                                            color = Color(0xFF94A3B8)
+                                            color = AppTheme.TextMuted
                                         )
                                     } else {
-                                        Text("Folder", fontSize = 11.sp, color = Color(0xFF64748B))
+                                        Text("Folder", fontSize = 11.sp, color = AppTheme.TextMuted)
                                     }
                                 }
 
@@ -4308,12 +4338,12 @@ fun PcFileManagerScreen(
                                     // View on Mobile Button
                                     IconButton(
                                         onClick = { viewFileOnMobile(item) },
-                                        modifier = Modifier.size(34.dp)
+                                        modifier = Modifier.size(36.dp)
                                     ) {
                                         Icon(
                                             Icons.Rounded.Visibility,
                                             contentDescription = "View on Mobile",
-                                            tint = Color(0xFF38BDF8),
+                                            tint = Color(0xFF06B6D4),
                                             modifier = Modifier.size(19.dp)
                                         )
                                     }
@@ -4321,7 +4351,7 @@ fun PcFileManagerScreen(
                                     // Save to phone (download)
                                     IconButton(
                                         onClick = { downloadToPhone(item) },
-                                        modifier = Modifier.size(34.dp)
+                                        modifier = Modifier.size(36.dp)
                                     ) {
                                         Icon(
                                             Icons.Rounded.Download,
@@ -4334,12 +4364,12 @@ fun PcFileManagerScreen(
                                     // Open on PC button (with confirmation)
                                     IconButton(
                                         onClick = { pendingPcOpenItem = item },
-                                        modifier = Modifier.size(34.dp)
+                                        modifier = Modifier.size(36.dp)
                                     ) {
                                         Icon(
                                             Icons.Rounded.Computer,
                                             contentDescription = "Open on PC",
-                                            tint = Color(0xFF94A3B8),
+                                            tint = AppTheme.TextMuted,
                                             modifier = Modifier.size(18.dp)
                                         )
                                     }
@@ -4967,10 +4997,10 @@ fun PhoneFileManagerScreen(
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
-                placeholder = { Text("Search phone files...", color = AppTheme.TextMuted, fontSize = 13.sp) },
+                placeholder = { Text("Search phone media & files...", color = AppTheme.TextMuted, fontSize = 13.sp) },
                 singleLine = true,
                 leadingIcon = {
-                    Icon(Icons.Rounded.Search, contentDescription = "Search", tint = AppTheme.AccentAmber)
+                    Icon(Icons.Rounded.Search, contentDescription = "Search", tint = Color(0xFF06B6D4))
                 },
                 trailingIcon = {
                     if (searchQuery.isNotEmpty()) {
@@ -4979,14 +5009,14 @@ fun PhoneFileManagerScreen(
                         }
                     }
                 },
-                shape = RoundedCornerShape(12.dp),
+                shape = RoundedCornerShape(16.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = AppTheme.AccentAmber,
+                    focusedBorderColor = Color(0xFF06B6D4),
                     unfocusedBorderColor = AppTheme.CardBorderSubtle,
                     focusedContainerColor = AppTheme.CardDarkElevated,
                     unfocusedContainerColor = AppTheme.CardDarkElevated,
-                    focusedTextColor = Color.White,
-                    unfocusedTextColor = Color.White
+                    focusedTextColor = AppTheme.TextPrimary,
+                    unfocusedTextColor = AppTheme.TextPrimary
                 ),
                 modifier = Modifier.fillMaxWidth()
             )
@@ -4998,7 +5028,7 @@ fun PhoneFileManagerScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 val categories = listOf(
                     "all" to "All",
@@ -5012,12 +5042,18 @@ fun PhoneFileManagerScreen(
                     FilterChip(
                         selected = isSelected,
                         onClick = { selectedCategory = catId },
-                        label = { Text(label, fontSize = 11.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal) },
+                        label = { Text(label, fontSize = 11.sp, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.SemiBold) },
+                        shape = RoundedCornerShape(12.dp),
                         colors = FilterChipDefaults.filterChipColors(
-                            selectedContainerColor = AppTheme.AccentAmber,
-                            selectedLabelColor = AppTheme.BackgroundDark,
+                            selectedContainerColor = Color(0xFF06B6D4),
+                            selectedLabelColor = Color(0xFF0B0F19),
                             containerColor = AppTheme.CardDarkElevated,
                             labelColor = AppTheme.TextSecondary
+                        ),
+                        border = FilterChipDefaults.filterChipBorder(
+                            enabled = true,
+                            selected = isSelected,
+                            borderColor = if (isSelected) Color(0xFF06B6D4) else AppTheme.CardBorderSubtle
                         )
                     )
                 }
@@ -5063,13 +5099,13 @@ fun PhoneFileManagerScreen(
                             Spacer(Modifier.height(20.dp))
                             Button(
                                 onClick = { multiplePermissionsLauncher.launch(mediaPermissions) },
-                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFF59E0B)),
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF06B6D4)),
                                 shape = RoundedCornerShape(12.dp),
                                 modifier = Modifier.fillMaxWidth().height(48.dp)
                             ) {
-                                Icon(Icons.Rounded.LockOpen, contentDescription = null, tint = Color.Black)
+                                Icon(Icons.Rounded.LockOpen, contentDescription = null, tint = Color(0xFF0B0F19))
                                 Spacer(Modifier.width(8.dp))
-                                Text("Grant Media Permissions", fontWeight = FontWeight.Bold, color = Color.Black)
+                                Text("Grant Media Permissions", fontWeight = FontWeight.Bold, color = Color(0xFF0B0F19))
                             }
 
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
@@ -5077,7 +5113,8 @@ fun PhoneFileManagerScreen(
                                 OutlinedButton(
                                     onClick = { showAllFilesConfirm = true },
                                     shape = RoundedCornerShape(12.dp),
-                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF38BDF8)),
+                                    colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF06B6D4)),
+                                    border = BorderStroke(1.dp, Color(0xFF06B6D4).copy(alpha = 0.5f)),
                                     modifier = Modifier.fillMaxWidth().height(46.dp)
                                 ) {
                                     Icon(Icons.Rounded.FolderShared, contentDescription = null, modifier = Modifier.size(18.dp))
@@ -5090,7 +5127,7 @@ fun PhoneFileManagerScreen(
                 }
             } else if (isLoading) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = Color(0xFFF59E0B))
+                    CircularProgressIndicator(color = Color(0xFF06B6D4))
                 }
             } else if (filteredItems.isEmpty()) {
                 Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -5103,29 +5140,37 @@ fun PhoneFileManagerScreen(
                 LazyColumn(modifier = Modifier.fillMaxSize()) {
                     items(filteredItems, key = { it.uri.toString() }) { item ->
                         val (tintColor, iconVector) = when (item.category) {
-                            "video" -> Pair(Color(0xFF38BDF8), Icons.Rounded.VideoFile)
+                            "video" -> Pair(Color(0xFF06B6D4), Icons.Rounded.VideoFile)
                             "audio" -> Pair(Color(0xFF10B981), Icons.Rounded.AudioFile)
                             "image" -> Pair(Color(0xFFEC4899), Icons.Rounded.Image)
-                            "document" -> Pair(Color(0xFF60A5FA), Icons.Rounded.Description)
-                            else -> Pair(Color(0xFF94A3B8), Icons.Rounded.InsertDriveFile)
+                            "document" -> Pair(Color(0xFF38BDF8), Icons.Rounded.Description)
+                            else -> Pair(AppTheme.TextSecondary, Icons.Rounded.InsertDriveFile)
                         }
 
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(vertical = 3.dp),
-                            shape = RoundedCornerShape(12.dp),
-                            colors = CardDefaults.cardColors(containerColor = AppTheme.CardDark),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = AppTheme.CardDarkElevated),
                             border = if (item.isLive) BorderStroke(1.5.dp, Color(0xFF10B981)) else BorderStroke(1.dp, AppTheme.CardBorderSubtle)
                         ) {
                             Row(
                                 modifier = Modifier.padding(12.dp),
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Icon(iconVector, contentDescription = null, tint = tintColor, modifier = Modifier.size(28.dp))
-                                Spacer(Modifier.width(10.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(tintColor.copy(alpha = 0.15f)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(iconVector, contentDescription = null, tint = tintColor, modifier = Modifier.size(24.dp))
+                                }
+                                Spacer(Modifier.width(12.dp))
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(item.name, fontWeight = FontWeight.SemiBold, color = AppTheme.TextPrimary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    Text(item.name, fontWeight = FontWeight.Bold, color = AppTheme.TextPrimary, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                     val sizeStr = formatFileSize(item.size)
                                     val durStr = if (item.duration > 0) {
                                         val min = TimeUnit.MILLISECONDS.toMinutes(item.duration)
@@ -5136,19 +5181,19 @@ fun PhoneFileManagerScreen(
                                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
                                             Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(Color(0xFF10B981)))
                                             Spacer(Modifier.width(4.dp))
-                                            Text("LIVE SHARING", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981))
+                                            Text("LIVE SHARING", fontSize = 10.sp, fontWeight = FontWeight.Black, color = Color(0xFF10B981))
                                             Spacer(Modifier.width(6.dp))
                                             Text(
                                                 "$sizeStr$durStr • ${item.category.uppercase()}",
                                                 fontSize = 11.sp,
-                                                color = Color(0xFF94A3B8)
+                                                color = AppTheme.TextMuted
                                             )
                                         }
                                     } else {
                                         Text(
                                             "$sizeStr$durStr • ${item.category.uppercase()}",
                                             fontSize = 11.sp,
-                                            color = Color(0xFF94A3B8)
+                                            color = AppTheme.TextMuted
                                         )
                                     }
                                 }
@@ -5156,14 +5201,14 @@ fun PhoneFileManagerScreen(
                                 // Save to PC (Upload)
                                 Button(
                                     onClick = { uploadToPc(item) },
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF38BDF8)),
-                                    shape = RoundedCornerShape(8.dp),
-                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF06B6D4)),
+                                    shape = RoundedCornerShape(10.dp),
+                                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
                                     modifier = Modifier.height(34.dp)
                                 ) {
-                                    Icon(Icons.Rounded.Upload, contentDescription = null, tint = Color(0xFF0F172A), modifier = Modifier.size(16.dp))
-                                    Spacer(Modifier.width(3.dp))
-                                    Text("SAVE TO PC", color = Color(0xFF0F172A), fontWeight = FontWeight.Bold, fontSize = 10.sp)
+                                    Icon(Icons.Rounded.Upload, contentDescription = null, tint = Color(0xFF0B0F19), modifier = Modifier.size(16.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("SAVE TO PC", color = Color(0xFF0B0F19), fontWeight = FontWeight.Black, fontSize = 10.sp)
                                 }
 
                                 // Play on PC if video or audio
@@ -5171,7 +5216,7 @@ fun PhoneFileManagerScreen(
                                     Spacer(Modifier.width(6.dp))
                                     IconButton(
                                         onClick = { sendToPc(item) },
-                                        modifier = Modifier.size(34.dp)
+                                        modifier = Modifier.size(36.dp)
                                     ) {
                                         Icon(Icons.Rounded.Tv, contentDescription = "Play on PC", tint = Color(0xFFF59E0B), modifier = Modifier.size(20.dp))
                                     }

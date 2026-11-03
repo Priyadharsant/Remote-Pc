@@ -2,7 +2,8 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   FolderOpen, Image, Video, Music, Download, FileText, AppWindow,
   RefreshCw, HardDriveDownload, Search, AlertCircle, Play,
-  Laptop, Smartphone, ChevronRight, Home, ArrowLeft, X, Square, Send, Radio
+  Laptop, Smartphone, ChevronRight, Home, ArrowLeft, X, Square, Send, Radio,
+  HardDrive, Activity
 } from 'lucide-react';
 import { api } from '../api';
 import type { ServerStatus, PhoneFileItem } from '../types';
@@ -45,7 +46,7 @@ export const FileManager: React.FC<FileManagerProps> = ({ status }) => {
   const [currentPcPath, setCurrentPcPath] = useState<string>('');
   const [parentPcPath, setParentPcPath] = useState<string | null>(null);
   const [shortcuts, setShortcuts] = useState<{ name: string; path: string }[]>([]);
-  const [, setDrives] = useState<string[]>([]);
+  const [drives, setDrives] = useState<string[]>([]);
 
   // Mobile Client connection detection
   const connectedClient = status?.clients && status.clients.length > 0 ? status.clients[0] : null;
@@ -144,7 +145,7 @@ export const FileManager: React.FC<FileManagerProps> = ({ status }) => {
 
   const handleLiveStream = async (file: PhoneFileItem) => {
     setOpeningId(file.path || file.id);
-    setActionMsg({ id: file.path || file.id, text: 'Launching stream / player...' });
+    setActionMsg({ id: file.path || file.id, text: 'Opening stream...' });
 
     try {
       if (source === 'pc') {
@@ -166,7 +167,6 @@ export const FileManager: React.FC<FileManagerProps> = ({ status }) => {
         }
         setActionMsg({ id: file.id, text: ok ? 'Live streaming on PC' : 'Streaming in browser' });
       }
-      // Refresh active streams after launching
       setTimeout(async () => {
         const s = await api.getActiveLiveStreams();
         setActiveStreams(s || []);
@@ -217,7 +217,6 @@ export const FileManager: React.FC<FileManagerProps> = ({ status }) => {
         if (status.status === 'completed' || status.status === 'cancelled' || status.status === 'error') {
           clearInterval(transferPollRef.current);
           transferPollRef.current = null;
-          // Auto close transfer modal after brief delay on completion
           setTimeout(() => {
             setActiveTransfer(null);
             fetchFiles();
@@ -301,13 +300,13 @@ export const FileManager: React.FC<FileManagerProps> = ({ status }) => {
   const getAppBadge = (file: PhoneFileItem) => {
     const ext = file.name.substring(file.name.lastIndexOf('.')).toLowerCase();
     if (file.app_type === 'apk' || ext === '.apk' || ext === '.xapk') {
-      return { text: 'APK', bg: 'bg-emerald-600', color: 'text-emerald-400' };
+      return { text: 'APK', bg: 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40' };
     }
     if (file.app_type === 'exe' || ext === '.exe' || ext === '.msi') {
-      return { text: 'EXE', bg: 'bg-sky-600', color: 'text-sky-400' };
+      return { text: 'EXE', bg: 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/40' };
     }
     if (file.app_type === 'ubt' || ext === '.deb' || ext === '.appimage' || ext === '.desktop') {
-      return { text: 'UBT', bg: 'bg-orange-600', color: 'text-orange-400' };
+      return { text: 'UBT', bg: 'bg-orange-500/20 text-orange-400 border border-orange-500/40' };
     }
     return null;
   };
@@ -315,13 +314,13 @@ export const FileManager: React.FC<FileManagerProps> = ({ status }) => {
   const getFileIcon = (file: PhoneFileItem) => {
     if (file.is_dir || file.type === 'folder') return <FolderOpen size={24} className="text-amber-400" />;
     const appBadge = getAppBadge(file);
-    if (appBadge) return <AppWindow size={24} className={appBadge.color} />;
+    if (appBadge) return <AppWindow size={24} className={appBadge.text === 'APK' ? 'text-emerald-400' : appBadge.text === 'EXE' ? 'text-cyan-400' : 'text-orange-400'} />;
     switch (file.type) {
       case 'image': return <Image size={24} className="text-pink-400" />;
       case 'video': return <Video size={24} className="text-cyan-400" />;
       case 'audio': return <Music size={24} className="text-emerald-400" />;
       case 'download': return <Download size={24} className="text-amber-400" />;
-      case 'document': return <FileText size={24} className="text-blue-400" />;
+      case 'document': return <FileText size={24} className="text-sky-400" />;
       default: return <FileText size={24} className="text-slate-400" />;
     }
   };
@@ -358,100 +357,101 @@ export const FileManager: React.FC<FileManagerProps> = ({ status }) => {
   });
 
   return (
-    <div className="space-y-4">
-      {/* Active Live Sharing Persistent Banner */}
+    <div className="space-y-4 animate-fade-in">
+      {/* Live Sharing Persistent Ambient Island */}
       {activeStreams.length > 0 && (
-        <div className="p-3 rounded-2xl bg-gradient-to-r from-emerald-950/60 to-slate-900 border border-emerald-500/40 shadow-lg shadow-emerald-500/10 flex items-center justify-between gap-3 animate-fade-in">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <div className="w-8 h-8 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center shrink-0">
-              <Radio size={16} className="text-emerald-400 animate-pulse" />
+        <div className="p-3.5 rounded-2xl bg-gradient-to-r from-emerald-950/80 via-slate-900/90 to-slate-950/90 border border-emerald-500/40 shadow-xl shadow-emerald-500/10 flex items-center justify-between gap-3 backdrop-blur-xl">
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-9 h-9 rounded-xl bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center shrink-0">
+              <Radio size={18} className="text-emerald-400 animate-pulse" />
             </div>
             <div className="min-w-0">
-              <div className="flex items-center gap-1.5">
-                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
-                <span className="text-xs font-bold text-emerald-400 uppercase tracking-wider">Live Sharing Active</span>
+              <div className="flex items-center gap-2">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_#10B981] animate-ping"></span>
+                <span className="text-[11px] font-black text-emerald-400 uppercase tracking-widest">Active Stream Channel</span>
               </div>
-              <p className="text-xs font-semibold text-slate-200 truncate" title={activeStreams[0].filename}>
+              <p className="text-xs font-semibold text-slate-100 truncate" title={activeStreams[0].filename}>
                 {activeStreams[0].filename}
-                {activeStreams[0].client && <span className="text-[11px] font-normal text-slate-400 ml-1.5">to {activeStreams[0].client}</span>}
+                {activeStreams[0].client && <span className="text-[11px] font-normal text-slate-400 ml-1.5">• to {activeStreams[0].client}</span>}
               </p>
             </div>
           </div>
           <button
             onClick={() => handleStopStream(activeStreams[0].id || activeStreams[0].path)}
-            className="px-3 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-xs font-bold flex items-center gap-1.5 transition shrink-0"
+            className="px-3.5 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-xs font-bold flex items-center gap-1.5 transition active:scale-95 shrink-0 shadow-sm"
           >
-            <Square size={12} className="fill-emerald-400" />
+            <Square size={11} className="fill-emerald-400" />
             <span>Stop Stream</span>
           </button>
         </div>
       )}
 
-      {/* Real-time Transfer Modal Dialog */}
+      {/* Real-time Transfer Modal HUD */}
       {activeTransfer && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in">
-          <div className="w-full max-w-md bg-slate-900/95 border border-cyan-500/40 rounded-2xl p-5 shadow-2xl shadow-cyan-500/20 space-y-4">
+          <div className="w-full max-w-md bg-gradient-to-b from-slate-900/95 to-slate-950/95 border border-cyan-500/40 rounded-3xl p-6 shadow-2xl shadow-cyan-500/20 space-y-4 backdrop-blur-2xl">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="w-9 h-9 rounded-xl bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center">
-                  <HardDriveDownload size={18} className="text-cyan-400 animate-bounce" />
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center">
+                  <HardDriveDownload size={20} className="text-cyan-400 animate-bounce" />
                 </div>
                 <div>
-                  <h4 className="text-xs font-bold text-cyan-400 uppercase tracking-wider">Device File Transfer</h4>
+                  <h4 className="text-xs font-black text-cyan-400 uppercase tracking-widest">Kinetic File Pipeline</h4>
                   <span className="text-[11px] font-semibold text-slate-400">{activeTransfer.direction}</span>
                 </div>
               </div>
-              <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+              <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase tracking-wider ${
                 activeTransfer.status === 'completed'
-                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                  ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 shadow-[0_0_10px_rgba(16,185,129,0.2)]'
                   : activeTransfer.status === 'cancelled'
-                  ? 'bg-red-500/20 text-red-400 border border-red-500/30'
-                  : 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30 animate-pulse'
+                  ? 'bg-rose-500/20 text-rose-400 border border-rose-500/40'
+                  : 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-[0_0_10px_rgba(6,182,212,0.2)] animate-pulse'
               }`}>
                 {activeTransfer.status}
               </span>
             </div>
 
-            <div>
-              <p className="text-sm font-bold text-slate-200 truncate" title={activeTransfer.filename}>
+            <div className="p-3 rounded-2xl bg-slate-950/60 border border-slate-800/80">
+              <p className="text-xs font-bold text-slate-200 truncate" title={activeTransfer.filename}>
                 {activeTransfer.filename}
               </p>
-              <p className="text-xs text-slate-400 mt-0.5">
-                {activeTransfer.message || 'Transferring...'}
+              <p className="text-[11px] text-slate-400 mt-0.5 flex items-center gap-1.5">
+                <Activity size={12} className="text-cyan-400 shrink-0" />
+                <span>{activeTransfer.message || 'Streaming packets...'}</span>
               </p>
             </div>
 
-            {/* Progress Bar */}
-            <div className="space-y-1.5">
-              <div className="w-full h-2.5 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+            {/* Glowing Progress Bar */}
+            <div className="space-y-2">
+              <div className="w-full h-3 bg-slate-950 rounded-full overflow-hidden border border-slate-800/80 p-0.5">
                 <div
-                  className={`h-full transition-all duration-300 rounded-full ${
+                  className={`h-full transition-all duration-300 rounded-full shadow-lg ${
                     activeTransfer.status === 'completed'
-                      ? 'bg-emerald-400'
+                      ? 'bg-gradient-to-r from-emerald-500 to-teal-400 shadow-emerald-500/40'
                       : activeTransfer.status === 'cancelled'
-                      ? 'bg-red-400'
-                      : 'bg-gradient-to-r from-cyan-500 to-sky-400'
+                      ? 'bg-gradient-to-r from-rose-500 to-red-600 shadow-rose-500/40'
+                      : 'bg-gradient-to-r from-cyan-500 via-teal-400 to-emerald-400 shadow-cyan-500/30'
                   }`}
                   style={{ width: `${Math.max(activeTransfer.percent, 3)}%` }}
                 />
               </div>
-              <div className="flex items-center justify-between text-xs text-slate-400 font-medium">
+              <div className="flex items-center justify-between text-xs text-slate-400 font-semibold">
                 <span>{formatSize(activeTransfer.transferred)} / {activeTransfer.total > 0 ? formatSize(activeTransfer.total) : '--'}</span>
-                <span className="text-cyan-300 font-bold">{activeTransfer.percent}%</span>
+                <span className="text-cyan-300 font-black tracking-wide">{activeTransfer.percent}%</span>
               </div>
             </div>
 
-            {/* Transfer Speed Badge */}
+            {/* Telemetry Capsule */}
             <div className="flex items-center justify-between pt-1 text-xs">
-              <span className="px-2.5 py-1 rounded-lg bg-slate-800/80 border border-slate-700/80 text-cyan-300 font-mono text-xs flex items-center gap-1.5">
-                <span>⚡ Speed:</span>
-                <span className="font-bold">{activeTransfer.speed_mb > 0 ? `${activeTransfer.speed_mb.toFixed(1)} MB/s` : 'Calculating...'}</span>
+              <span className="px-3 py-1.5 rounded-xl bg-slate-950/80 border border-slate-800 text-cyan-300 font-mono text-xs flex items-center gap-2">
+                <span className="text-slate-400">⚡ Speed:</span>
+                <span className="font-extrabold text-cyan-300">{activeTransfer.speed_mb > 0 ? `${activeTransfer.speed_mb.toFixed(1)} MB/s` : 'Analyzing...'}</span>
               </span>
 
               {activeTransfer.status === 'in_progress' ? (
                 <button
                   onClick={handleCancelTransfer}
-                  className="px-3 py-1.5 rounded-xl bg-red-500/15 hover:bg-red-500/25 border border-red-500/30 text-red-400 hover:text-red-300 text-xs font-bold transition flex items-center gap-1"
+                  className="px-3.5 py-1.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-400 hover:text-rose-300 text-xs font-bold transition flex items-center gap-1.5 active:scale-95"
                 >
                   <X size={13} />
                   <span>Cancel Transfer</span>
@@ -459,9 +459,9 @@ export const FileManager: React.FC<FileManagerProps> = ({ status }) => {
               ) : (
                 <button
                   onClick={() => setActiveTransfer(null)}
-                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition"
+                  className="px-4 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition active:scale-95 border border-slate-700"
                 >
-                  Close
+                  Dismiss
                 </button>
               )}
             </div>
@@ -469,44 +469,51 @@ export const FileManager: React.FC<FileManagerProps> = ({ status }) => {
         </div>
       )}
 
-      {/* Main Top Header: Source Selector & Path Bar */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 p-4 rounded-2xl bg-slate-900/60 border border-slate-800/80 backdrop-blur-sm">
-        {/* Source Switcher */}
-        <div className="flex items-center gap-3">
-          <div className="p-2.5 rounded-xl bg-cyan-500/10 border border-cyan-500/20 text-cyan-400">
-            {source === 'pc' ? <Laptop size={22} /> : <Smartphone size={22} />}
+      {/* Main Top Header: Kinetic Source Pill Switcher */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 p-4 rounded-3xl bg-gradient-to-r from-slate-900/90 via-slate-900/70 to-slate-950/90 border border-slate-800/80 backdrop-blur-xl shadow-xl shadow-black/40">
+        <div className="flex items-center gap-3.5">
+          <div className="w-11 h-11 rounded-2xl bg-gradient-to-br from-cyan-500/20 via-emerald-500/10 to-transparent border border-cyan-500/30 flex items-center justify-center text-cyan-400 shadow-inner">
+            {source === 'pc' ? <Laptop size={22} className="text-cyan-400" /> : <Smartphone size={22} className="text-emerald-400" />}
           </div>
           <div>
-            <div className="flex items-center gap-2">
-              <h3 className="text-base font-bold text-slate-100">
-                {source === 'pc' ? 'PC File Explorer' : 'Phone Storage Explorer'}
+            <div className="flex items-center gap-2.5">
+              <h3 className="text-base font-extrabold text-slate-100 tracking-tight">
+                {source === 'pc' ? 'PC Storage Explorer' : 'Phone Storage Explorer'}
               </h3>
-              {source === 'phone' && (
+              {source === 'phone' ? (
                 <span
-                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${
+                  className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 ${
                     clientIp
-                      ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
-                      : 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
+                      ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/40 shadow-[0_0_8px_rgba(16,185,129,0.2)]'
+                      : 'bg-amber-500/15 text-amber-400 border border-amber-500/40'
                   }`}
                 >
+                  <span className={`w-1.5 h-1.5 rounded-full ${clientIp ? 'bg-emerald-400' : 'bg-amber-400'}`}></span>
                   {clientIp ? `Connected: ${clientIp}` : 'ADB (127.0.0.1)'}
+                </span>
+              ) : (
+                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-cyan-500/15 text-cyan-400 border border-cyan-500/30 flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-cyan-400"></span>
+                  Local Drives & System
                 </span>
               )}
             </div>
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-slate-400 mt-0.5 font-medium">
               {source === 'pc'
-                ? 'Browse, stream, and manage your computer files and apps'
-                : 'Browse phone photos, videos, apps (APK), and documents live'}
+                ? 'High-speed remote filesystem exploration, live media streaming & app packaging'
+                : 'Browse mobile storage photos, videos, apps (APK), downloads & documents'}
             </p>
           </div>
         </div>
 
         {/* Source Toggle Pill */}
-        <div className="flex items-center gap-1.5 bg-slate-950/80 p-1 rounded-xl border border-slate-800 self-start md:self-auto">
+        <div className="flex items-center p-1 rounded-2xl bg-slate-950/80 border border-slate-800/90 self-start md:self-auto shadow-inner">
           <button
             onClick={() => { setSource('pc'); setActiveCategory('all'); }}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
-              source === 'pc' ? 'bg-cyan-500 text-slate-950 shadow-sm' : 'text-slate-400 hover:text-slate-200'
+            className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all duration-200 active:scale-95 ${
+              source === 'pc'
+                ? 'bg-gradient-to-r from-cyan-500 to-teal-400 text-slate-950 font-black shadow-md shadow-cyan-500/20'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/50'
             }`}
           >
             <Laptop size={14} />
@@ -514,8 +521,10 @@ export const FileManager: React.FC<FileManagerProps> = ({ status }) => {
           </button>
           <button
             onClick={() => { setSource('phone'); setActiveCategory('all'); }}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition ${
-              source === 'phone' ? 'bg-cyan-500 text-slate-950 shadow-sm' : 'text-slate-400 hover:text-slate-200'
+            className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center gap-2 transition-all duration-200 active:scale-95 ${
+              source === 'phone'
+                ? 'bg-gradient-to-r from-emerald-500 to-teal-400 text-slate-950 font-black shadow-md shadow-emerald-500/20'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/50'
             }`}
           >
             <Smartphone size={14} />
@@ -524,13 +533,13 @@ export const FileManager: React.FC<FileManagerProps> = ({ status }) => {
         </div>
       </div>
 
-      {/* PC Breadcrumb & Shortcuts Bar (When in PC mode) */}
+      {/* PC Breadcrumb & Quick Drive Bar */}
       {source === 'pc' && (
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 p-2.5 rounded-xl bg-slate-900/40 border border-slate-800/60 text-xs">
-          <div className="flex items-center gap-1.5 flex-1 min-w-0">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 rounded-2xl bg-slate-900/70 border border-slate-800/80 backdrop-blur-md">
+          <div className="flex items-center gap-2 flex-1 min-w-0">
             <button
               onClick={() => setCurrentPcPath('')}
-              className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-cyan-300 transition shrink-0"
+              className="p-1.5 rounded-xl hover:bg-slate-800 text-slate-400 hover:text-cyan-300 transition active:scale-90 shrink-0 border border-slate-800/80"
               title="Drives View"
             >
               <Home size={15} />
@@ -538,27 +547,41 @@ export const FileManager: React.FC<FileManagerProps> = ({ status }) => {
             {parentPcPath !== null && (
               <button
                 onClick={handleGoBack}
-                className="p-1 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-cyan-300 transition shrink-0"
+                className="p-1.5 rounded-xl hover:bg-slate-800 text-slate-400 hover:text-cyan-300 transition active:scale-90 shrink-0 border border-slate-800/80"
                 title="Up one folder"
               >
                 <ArrowLeft size={15} />
               </button>
             )}
-            <div className="font-mono text-slate-300 truncate px-2 py-0.5 rounded bg-slate-950/50 border border-slate-800/80 flex-1">
-              {currentPcPath || 'This PC (Drives)'}
+            <div className="font-mono text-xs text-slate-300 truncate px-3 py-1.5 rounded-xl bg-slate-950/70 border border-slate-800/80 flex-1 shadow-inner flex items-center gap-2">
+              <FolderOpen size={13} className="text-amber-400 shrink-0" />
+              <span className="truncate">{currentPcPath || 'This PC (Storage Partitions)'}</span>
             </div>
           </div>
 
-          {/* Quick Shortcuts */}
-          <div className="flex items-center gap-1 shrink-0 overflow-x-auto">
+          {/* Quick Shortcuts & Drives */}
+          <div className="flex items-center gap-1.5 shrink-0 overflow-x-auto scrollbar-none">
+            {drives.length > 0 && currentPcPath && (
+              <div className="flex items-center gap-1 pr-1 border-r border-slate-800/80">
+                {drives.map((drv) => (
+                  <button
+                    key={drv}
+                    onClick={() => setCurrentPcPath(drv)}
+                    className="px-2 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider bg-slate-950/60 hover:bg-slate-800 text-slate-400 hover:text-cyan-300 border border-slate-800/60 transition"
+                  >
+                    {drv}
+                  </button>
+                ))}
+              </div>
+            )}
             {shortcuts.map((sc) => (
               <button
                 key={sc.path}
                 onClick={() => setCurrentPcPath(sc.path)}
-                className={`px-2 py-1 rounded-lg text-[11px] font-semibold transition ${
+                className={`px-2.5 py-1 rounded-xl text-[11px] font-bold transition-all active:scale-95 ${
                   currentPcPath === sc.path
-                    ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30'
-                    : 'bg-slate-800/60 text-slate-400 hover:text-slate-200 hover:bg-slate-700/60'
+                    ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 shadow-sm shadow-cyan-500/10'
+                    : 'bg-slate-950/60 text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-slate-800/60'
                 }`}
               >
                 {sc.name}
@@ -568,61 +591,76 @@ export const FileManager: React.FC<FileManagerProps> = ({ status }) => {
         </div>
       )}
 
-      {/* Category Pills & Search */}
+      {/* Kinetic Category Pill Strip & Search */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         {/* Category Pills */}
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1 sm:pb-0 scrollbar-none">
           {([
-            { id: 'all', label: 'All Files' },
-            { id: 'app', label: 'Apps (UBT / APK / EXE)' },
-            { id: 'image', label: 'Photos' },
-            { id: 'video', label: 'Videos' },
-            { id: 'audio', label: 'Music' },
-            { id: 'document', label: 'Docs' }
-          ] as { id: CategoryType; label: string }[]).map((cat) => (
-            <button
-              key={cat.id}
-              onClick={() => setActiveCategory(cat.id)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition ${
-                activeCategory === cat.id
-                  ? 'bg-cyan-500 text-slate-950 shadow-sm shadow-cyan-500/20'
-                  : 'bg-slate-900/60 text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-slate-800'
-              }`}
-            >
-              {cat.label}
-            </button>
-          ))}
+            { id: 'all', label: 'All Files', icon: HardDrive },
+            { id: 'app', label: 'Apps (UBT/APK/EXE)', icon: AppWindow },
+            { id: 'image', label: 'Photos', icon: Image },
+            { id: 'video', label: 'Videos', icon: Video },
+            { id: 'audio', label: 'Audio', icon: Music },
+            { id: 'document', label: 'Docs', icon: FileText }
+          ] as { id: CategoryType; label: string; icon: any }[]).map((cat) => {
+            const IconComp = cat.icon;
+            const isSelected = activeCategory === cat.id;
+            return (
+              <button
+                key={cat.id}
+                onClick={() => setActiveCategory(cat.id)}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold whitespace-nowrap flex items-center gap-1.5 transition-all duration-200 active:scale-95 ${
+                  isSelected
+                    ? 'bg-gradient-to-r from-cyan-500 to-teal-400 text-slate-950 font-black shadow-md shadow-cyan-500/20'
+                    : 'bg-slate-900/60 text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 border border-slate-800/80'
+                }`}
+              >
+                <IconComp size={13} className={isSelected ? 'text-slate-950' : 'text-slate-400'} />
+                <span>{cat.label}</span>
+              </button>
+            );
+          })}
         </div>
 
-        {/* Search Input */}
-        <div className="relative flex-1 sm:w-56">
-          <Search size={14} className="absolute left-3 top-2.5 text-slate-400" />
+        {/* Search Bar */}
+        <div className="relative flex-1 sm:w-64">
+          <Search size={14} className="absolute left-3.5 top-2.5 text-slate-400 pointer-events-none" />
           <input
             type="text"
-            placeholder="Search files & apps..."
+            placeholder="Search items, tags, extensions..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-8 pr-3 py-1.5 bg-slate-900/80 border border-slate-800 rounded-xl text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500/50"
+            className="w-full pl-9 pr-3.5 py-2 bg-slate-900/80 border border-slate-800 rounded-2xl text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-cyan-500/60 focus:ring-1 focus:ring-cyan-500/30 transition shadow-inner"
           />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              className="absolute right-3 top-2.5 text-slate-400 hover:text-slate-200"
+            >
+              <X size={13} />
+            </button>
+          )}
         </div>
       </div>
 
-      {/* Files Grid */}
+      {/* Files Grid / Drives View */}
       {loading ? (
-        <div className="p-12 text-center text-slate-400 text-xs space-y-2">
-          <RefreshCw size={24} className="animate-spin text-cyan-400 mx-auto" />
-          <p>Querying files and generating app thumbnails...</p>
+        <div className="p-16 rounded-3xl bg-slate-900/40 border border-slate-800/80 text-center space-y-3">
+          <RefreshCw size={28} className="animate-spin text-cyan-400 mx-auto" />
+          <p className="text-xs font-semibold text-slate-300">Scanning filesystem and reading metadata...</p>
         </div>
       ) : filteredFiles.length === 0 ? (
-        <div className="p-8 rounded-2xl bg-slate-900/40 border border-slate-800/80 text-center space-y-2">
-          <AlertCircle size={24} className="text-slate-500 mx-auto" />
-          <h4 className="font-bold text-sm text-slate-300">No Files Found</h4>
-          <p className="text-xs text-slate-500 max-w-sm mx-auto">
-            {errorMsg || 'No items matched your current category filter.'}
+        <div className="p-12 rounded-3xl bg-slate-900/40 border border-slate-800/80 text-center space-y-3">
+          <div className="w-12 h-12 rounded-2xl bg-slate-800/60 border border-slate-700/60 flex items-center justify-center mx-auto text-slate-400">
+            <AlertCircle size={24} />
+          </div>
+          <h4 className="font-extrabold text-sm text-slate-200">No Items Detected</h4>
+          <p className="text-xs text-slate-400 max-w-sm mx-auto">
+            {errorMsg || 'No files matched your filter query or the current directory is empty.'}
           </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5">
           {filteredFiles.map((file) => {
             const isDir = Boolean(file.is_dir || file.type === 'folder');
             const appBadge = getAppBadge(file);
@@ -638,17 +676,17 @@ export const FileManager: React.FC<FileManagerProps> = ({ status }) => {
                   if (isDir && file.path) handleOpenFolder(file.path);
                   else handleLiveStream(file);
                 }}
-                className={`p-3 rounded-xl bg-slate-900/70 border flex flex-col justify-between group relative overflow-hidden select-none transition ${
+                className={`p-3.5 rounded-2xl bg-gradient-to-b from-slate-900/80 to-slate-950/90 border flex flex-col justify-between group relative overflow-hidden select-none transition-all duration-200 hover:-translate-y-0.5 ${
                   isLive
-                    ? 'border-emerald-500 ring-2 ring-emerald-500/40 shadow-lg shadow-emerald-500/15'
-                    : 'border-slate-800/80 hover:border-cyan-500/40 hover:shadow-cyan-500/5'
-                } ${isDir ? 'cursor-pointer hover:bg-slate-800/50' : ''}`}
+                    ? 'border-emerald-500 shadow-[0_8px_25px_rgba(16,185,129,0.18)] ring-1 ring-emerald-500/50'
+                    : 'border-slate-800/80 hover:border-cyan-500/40 hover:shadow-[0_8px_25px_rgba(6,182,212,0.12)]'
+                } ${isDir ? 'cursor-pointer' : ''}`}
               >
                 {/* File Header with Thumbnail */}
-                <div className="flex items-start gap-2.5">
+                <div className="flex items-start gap-3">
                   {/* Thumbnail / App Icon Container */}
                   <div
-                    className="relative w-12 h-12 rounded-xl bg-slate-950/90 border border-slate-800 shrink-0 overflow-hidden flex items-center justify-center group-hover:border-cyan-500/50 transition cursor-pointer"
+                    className="relative w-12 h-12 rounded-xl bg-slate-950/90 border border-slate-800/90 shrink-0 overflow-hidden flex items-center justify-center group-hover:border-cyan-500/40 transition-all cursor-pointer shadow-inner"
                     onClick={() => {
                       if (isDir && file.path) handleOpenFolder(file.path);
                       else handleLiveStream(file);
@@ -672,7 +710,7 @@ export const FileManager: React.FC<FileManagerProps> = ({ status }) => {
 
                     {/* App Platform Badge */}
                     {appBadge && (
-                      <span className={`absolute bottom-0 right-0 px-1 py-0.2 text-[8px] font-black rounded-tl-md text-white tracking-wider ${appBadge.bg}`}>
+                      <span className={`absolute bottom-0 right-0 px-1 py-0.2 text-[8px] font-black rounded-tl-md ${appBadge.bg}`}>
                         {appBadge.text}
                       </span>
                     )}
@@ -686,7 +724,7 @@ export const FileManager: React.FC<FileManagerProps> = ({ status }) => {
                       else handleLiveStream(file);
                     }}
                   >
-                    <h5 className="font-semibold text-xs text-slate-200 truncate group-hover:text-cyan-300 transition" title={file.name}>
+                    <h5 className="font-bold text-xs text-slate-200 truncate group-hover:text-cyan-300 transition" title={file.name}>
                       {file.name}
                     </h5>
 
@@ -695,19 +733,21 @@ export const FileManager: React.FC<FileManagerProps> = ({ status }) => {
                       <div className="flex items-center gap-1.5 mt-1">
                         <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 text-[9px] font-black tracking-wide animate-pulse">
                           <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                          LIVE SHARING
+                          LIVE STREAM
                         </span>
                         <span className="text-[10px] text-slate-400">{formatSize(file.size)}</span>
                       </div>
                     ) : (
                       <div className="flex items-center gap-1.5 mt-1 text-[11px] text-slate-400">
                         {isDir ? (
-                          <span className="text-amber-400 font-medium">Directory</span>
+                          <span className="text-amber-400 font-semibold flex items-center gap-1">
+                            <FolderOpen size={11} /> Directory
+                          </span>
                         ) : (
                           <>
                             <span>{formatSize(file.size)}</span>
                             <span>•</span>
-                            <span className="uppercase text-[10px] font-bold text-slate-500">
+                            <span className="uppercase text-[10px] font-black text-slate-500 tracking-wider">
                               {file.name.substring(file.name.lastIndexOf('.') + 1) || file.type}
                             </span>
                           </>
@@ -719,15 +759,15 @@ export const FileManager: React.FC<FileManagerProps> = ({ status }) => {
 
                 {/* Bottom Actions Bar */}
                 {msg ? (
-                  <div className="mt-2.5 text-[11px] font-medium text-cyan-300 bg-cyan-950/40 py-1.5 px-2 rounded-lg border border-cyan-500/20 text-center truncate animate-fade-in">
+                  <div className="mt-2.5 text-[11px] font-semibold text-cyan-300 bg-cyan-950/40 py-1.5 px-2 rounded-xl border border-cyan-500/30 text-center truncate animate-fade-in">
                     {msg}
                   </div>
                 ) : (
-                  <div className="flex items-center gap-1.5 mt-2.5 pt-2 border-t border-slate-800/60">
+                  <div className="flex items-center gap-1.5 mt-3 pt-2.5 border-t border-slate-800/60">
                     {isDir ? (
                       <button
                         onClick={() => file.path && handleOpenFolder(file.path)}
-                        className="w-full py-1 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-cyan-300 text-xs font-semibold flex items-center justify-center gap-1 transition"
+                        className="w-full py-1.5 px-3 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 text-cyan-300 text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-95 border border-slate-700/60"
                       >
                         <span>Open Folder</span>
                         <ChevronRight size={13} />
@@ -737,7 +777,7 @@ export const FileManager: React.FC<FileManagerProps> = ({ status }) => {
                         <button
                           onClick={() => handleLiveStream(file)}
                           disabled={isOpening}
-                          className="flex-1 py-1 px-2 rounded-lg bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 text-cyan-300 text-xs font-semibold flex items-center justify-center gap-1 transition"
+                          className="flex-1 py-1.5 px-2.5 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 text-cyan-300 text-xs font-bold flex items-center justify-center gap-1.5 transition active:scale-95"
                         >
                           {isOpening ? (
                             <RefreshCw size={11} className="animate-spin text-cyan-400" />
@@ -751,10 +791,10 @@ export const FileManager: React.FC<FileManagerProps> = ({ status }) => {
                         {source === 'phone' && (
                           <button
                             onClick={() => handleSaveToPc(file)}
-                            className="py-1 px-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium flex items-center justify-center gap-1 transition"
-                            title="Save to Downloads/RemotePC with live progress"
+                            className="py-1.5 px-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 text-slate-200 text-xs font-bold flex items-center justify-center gap-1 transition active:scale-95 border border-slate-700/60"
+                            title="Download to PC"
                           >
-                            <HardDriveDownload size={12} />
+                            <HardDriveDownload size={13} className="text-emerald-400" />
                             <span>Save</span>
                           </button>
                         )}
@@ -763,10 +803,10 @@ export const FileManager: React.FC<FileManagerProps> = ({ status }) => {
                         {source === 'pc' && !isDir && (
                           <button
                             onClick={() => handleSendToPhone(file)}
-                            className="py-1 px-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium flex items-center justify-center gap-1 transition"
-                            title="Send to Phone Downloads/RemotePC"
+                            className="py-1.5 px-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 text-slate-200 text-xs font-bold flex items-center justify-center gap-1 transition active:scale-95 border border-slate-700/60"
+                            title="Send to Phone"
                           >
-                            <Send size={11} className="text-cyan-400" />
+                            <Send size={12} className="text-cyan-400" />
                             <span>Send</span>
                           </button>
                         )}
@@ -775,7 +815,7 @@ export const FileManager: React.FC<FileManagerProps> = ({ status }) => {
                         {isLive && (
                           <button
                             onClick={() => handleStopStream(file.path || file.name)}
-                            className="p-1 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 transition"
+                            className="p-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-300 transition active:scale-90 border border-emerald-500/30"
                             title="Stop Live Sharing"
                           >
                             <Square size={12} className="fill-emerald-400" />
