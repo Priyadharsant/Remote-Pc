@@ -2,7 +2,7 @@
 ; Remote PC Server & Modern React Dashboard Setup Script
 
 #define MyAppName "Remote PC"
-#define MyAppVersion "3.5.0"
+#define MyAppVersion "3.6.0"
 #define MyAppPublisher "Remote PC"
 #define MyAppServerExe "Remote_Server.exe"
 #define MyAppGuiExe "Remote PC GUI.exe"

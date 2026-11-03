@@ -306,161 +306,1328 @@ setup_crash_logging()
 CONFIG = setup_config()
 SERVER_NAME = CONFIG.get('name', '')
 
-HTML = """
-<!doctype html>
+HTML = """<!doctype html>
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>PC Remote</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+    <title>Remote PC • Modern Web Deck</title>
+    <meta name="theme-color" content="#070B14">
     <style>
-        body {
-            align-items: center;
-            background: #101820;
-            color: #f7f3e8;
-            display: flex;
-            font-family: "Segoe UI", sans-serif;
-            justify-content: center;
+        :root {
+            --bg-base: #070B14;
+            --bg-surface: rgba(15, 23, 42, 0.75);
+            --bg-elevated: rgba(30, 41, 59, 0.7);
+            --border-subtle: rgba(255, 255, 255, 0.08);
+            --border-accent: rgba(56, 189, 248, 0.35);
+            --primary: #38BDF8;
+            --primary-glow: rgba(56, 189, 248, 0.25);
+            --accent-cyan: #00F0FF;
+            --accent-emerald: #10B981;
+            --accent-rose: #F43F5E;
+            --accent-amber: #F59E0B;
+            --accent-purple: #A855F7;
+            --text-primary: #F8FAFC;
+            --text-secondary: #94A3B8;
+            --text-muted: #64748B;
+            --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Inter", sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+            -webkit-tap-highlight-color: transparent;
             margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: var(--bg-base);
+            background-image: 
+                radial-gradient(circle at 15% 15%, rgba(56, 189, 248, 0.08) 0%, transparent 40%),
+                radial-gradient(circle at 85% 85%, rgba(168, 85, 247, 0.06) 0%, transparent 40%);
+            color: var(--text-primary);
+            font-family: var(--font-family);
             min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: manipulation;
+            overflow-x: hidden;
+            padding-bottom: 24px;
         }
 
-        main {
-            background: #1e2d38;
-            border-radius: 24px;
-            box-shadow: 0 24px 70px rgba(0, 0, 0, 0.35);
-            padding: 28px;
-            text-align: center;
-            width: min(360px, calc(100vw - 32px));
+        /* Ambient Glow & Container */
+        .app-container {
+            width: 100%;
+            max-width: 480px;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            padding: 16px 16px 32px;
+            gap: 16px;
         }
 
-        h1 {
-            font-size: 28px;
-            margin: 0 0 22px;
+        /* Glassmorphic Cards */
+        .glass-card {
+            background: var(--bg-surface);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid var(--border-subtle);
+            border-radius: 20px;
+            padding: 18px;
+            box-shadow: 0 12px 36px -4px rgba(0, 0, 0, 0.45);
+            transition: border-color 0.25s, box-shadow 0.25s, transform 0.2s;
         }
 
-        .grid {
-            display: none;
+        .glass-card:focus-within {
+            border-color: var(--border-accent);
+        }
+
+        /* Header Bar */
+        .app-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 18px;
+            background: rgba(11, 17, 32, 0.85);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid var(--border-subtle);
+            border-radius: 18px;
+        }
+
+        .brand-block {
+            display: flex;
+            align-items: center;
             gap: 12px;
-            grid-template-columns: repeat(3, 1fr);
         }
 
-        .grid.unlocked {
-            display: grid;
+        .brand-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, #0284C7, #00F0FF);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #fff;
+            box-shadow: 0 4px 14px rgba(0, 240, 255, 0.3);
         }
 
-        button {
-            background: #f2aa4c;
-            border: 0;
+        .brand-icon svg {
+            width: 20px;
+            height: 20px;
+            stroke-width: 2.2;
+        }
+
+        .brand-title {
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: -0.2px;
+            color: var(--text-primary);
+        }
+
+        .brand-subtitle {
+            font-size: 11px;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+
+        .status-pill {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            padding: 6px 12px;
+            border-radius: 999px;
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--accent-emerald);
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+
+        .status-pill.offline {
+            background: rgba(244, 63, 94, 0.1);
+            border-color: rgba(244, 63, 94, 0.3);
+            color: var(--accent-rose);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+            box-shadow: 0 0 10px currentColor;
+            animation: pulse-dot 2s infinite ease-in-out;
+        }
+
+        @keyframes pulse-dot {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.85); }
+        }
+
+        /* Auth View */
+        .auth-card {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            text-align: center;
+            padding: 32px 24px;
+        }
+
+        .auth-shield {
+            width: 60px;
+            height: 60px;
             border-radius: 16px;
-            color: #101820;
+            background: rgba(56, 189, 248, 0.12);
+            border: 1px solid var(--border-accent);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--primary);
+            margin: 0 auto 4px;
+        }
+
+        .auth-title {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .auth-desc {
+            font-size: 13px;
+            color: var(--text-secondary);
+            line-height: 1.4;
+        }
+
+        .auth-input-group {
+            position: relative;
+            display: flex;
+            align-items: center;
+        }
+
+        .auth-input {
+            width: 100%;
+            background: rgba(15, 23, 42, 0.9);
+            border: 1.5px solid rgba(255, 255, 255, 0.12);
+            border-radius: 14px;
+            color: var(--text-primary);
+            font-size: 16px;
+            padding: 14px 16px;
+            outline: none;
+            transition: all 0.2s;
+            text-align: center;
+            letter-spacing: 2px;
+        }
+
+        .auth-input:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 4px var(--primary-glow);
+        }
+
+        .btn-connect {
+            width: 100%;
+            background: linear-gradient(135deg, #0284C7, #00F0FF);
+            color: #070B14;
+            border: none;
+            border-radius: 14px;
+            padding: 14px;
+            font-size: 15px;
+            font-weight: 700;
+            letter-spacing: 0.3px;
             cursor: pointer;
+            box-shadow: 0 8px 20px rgba(0, 240, 255, 0.25);
+            transition: transform 0.15s, opacity 0.15s, box-shadow 0.15s;
+        }
+
+        .btn-connect:active {
+            transform: scale(0.98);
+            opacity: 0.9;
+        }
+
+        .auth-status-msg {
+            font-size: 12px;
+            min-height: 18px;
+            color: var(--text-muted);
+            font-weight: 500;
+            transition: color 0.2s;
+        }
+
+        /* Navigation Tabs */
+        .tab-bar {
+            display: flex;
+            background: rgba(11, 17, 32, 0.9);
+            backdrop-filter: blur(16px);
+            border: 1px solid var(--border-subtle);
+            border-radius: 16px;
+            padding: 5px;
+            gap: 4px;
+        }
+
+        .tab-btn {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 4px;
+            padding: 8px 4px;
+            border-radius: 12px;
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            font-size: 11px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .tab-btn svg {
+            width: 18px;
+            height: 18px;
+            stroke-width: 2;
+        }
+
+        .tab-btn.active {
+            background: rgba(56, 189, 248, 0.14);
+            color: var(--primary);
+            border: 1px solid var(--border-accent);
+            box-shadow: 0 4px 12px rgba(56, 189, 248, 0.15);
+        }
+
+        /* Screens */
+        .screen-content {
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        /* Sliders Card */
+        .slider-section {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .slider-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .slider-meta {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+
+        .slider-val-badge {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--primary);
+            background: rgba(56, 189, 248, 0.12);
+            padding: 3px 8px;
+            border-radius: 8px;
+            border: 1px solid rgba(56, 189, 248, 0.25);
+        }
+
+        .slider-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .slider-icon-btn {
+            width: 38px;
+            height: 38px;
+            border-radius: 12px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-subtle);
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            flex-shrink: 0;
+            transition: background 0.15s, transform 0.1s;
+        }
+
+        .slider-icon-btn:active {
+            transform: scale(0.92);
+            background: rgba(56, 189, 248, 0.2);
+        }
+
+        .slider-input {
+            flex: 1;
+            -webkit-appearance: none;
+            appearance: none;
+            height: 8px;
+            border-radius: 999px;
+            background: rgba(51, 65, 85, 0.6);
+            outline: none;
+            transition: background 0.2s;
+        }
+
+        .slider-input::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #38BDF8, #00F0FF);
+            cursor: pointer;
+            box-shadow: 0 0 10px rgba(0, 240, 255, 0.6);
+            border: 2px solid #fff;
+            transition: transform 0.15s;
+        }
+
+        .slider-input::-webkit-slider-thumb:active {
+            transform: scale(1.25);
+        }
+
+        /* Media Controller Deck */
+        .media-deck {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .media-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+        }
+
+        .media-buttons {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .media-btn {
+            width: 52px;
+            height: 52px;
+            border-radius: 16px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-subtle);
+            color: var(--text-primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: transform 0.15s, background 0.15s, border-color 0.15s;
+        }
+
+        .media-btn svg {
+            width: 22px;
+            height: 22px;
+        }
+
+        .media-btn:active {
+            transform: scale(0.9);
+            background: rgba(56, 189, 248, 0.15);
+            border-color: var(--border-accent);
+        }
+
+        .media-btn.play-main {
+            width: 64px;
+            height: 64px;
+            border-radius: 20px;
+            background: linear-gradient(135deg, #0284C7, #00F0FF);
+            color: #070B14;
+            border: none;
+            box-shadow: 0 8px 24px rgba(0, 240, 255, 0.35);
+        }
+
+        .media-btn.play-main svg {
+            width: 28px;
+            height: 28px;
+            fill: currentColor;
+        }
+
+        /* Action Grid */
+        .section-title {
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+            color: var(--text-muted);
+            margin: 6px 0 2px 4px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .section-title::after {
+            content: "";
+            flex: 1;
+            height: 1px;
+            background: var(--border-subtle);
+        }
+
+        .actions-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+        }
+
+        .action-tile {
+            background: var(--bg-surface);
+            backdrop-filter: blur(16px);
+            border: 1px solid var(--border-subtle);
+            border-radius: 16px;
+            padding: 16px 10px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            color: var(--text-primary);
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            min-height: 84px;
+            transition: all 0.15s ease;
+        }
+
+        .action-tile svg {
+            width: 22px;
+            height: 22px;
+            stroke-width: 2;
+            color: var(--primary);
+            transition: transform 0.15s;
+        }
+
+        .action-tile:active {
+            transform: scale(0.95);
+            background: rgba(56, 189, 248, 0.12);
+            border-color: var(--border-accent);
+        }
+
+        .action-tile.danger svg {
+            color: var(--accent-rose);
+        }
+
+        .action-tile.danger:active {
+            background: rgba(244, 63, 94, 0.15);
+            border-color: rgba(244, 63, 94, 0.4);
+        }
+
+        .action-tile.warning svg {
+            color: var(--accent-amber);
+        }
+
+        .action-tile.warning:active {
+            background: rgba(245, 158, 11, 0.15);
+            border-color: rgba(245, 158, 11, 0.4);
+        }
+
+        /* Trackpad Tab */
+        .trackpad-deck {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            height: 60vh;
+            min-height: 380px;
+        }
+
+        .trackpad-area {
+            flex: 1;
+            background: rgba(15, 23, 42, 0.85);
+            border: 1.5px dashed rgba(56, 189, 248, 0.25);
+            border-radius: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            touch-action: none;
+            overflow: hidden;
+            background-image: radial-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+
+        .trackpad-area:active {
+            border-style: solid;
+            border-color: var(--primary);
+            box-shadow: inset 0 0 20px rgba(56, 189, 248, 0.1);
+        }
+
+        .trackpad-hint {
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-muted);
+            pointer-events: none;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .trackpad-buttons {
+            display: flex;
+            gap: 10px;
+            height: 64px;
+        }
+
+        .click-btn {
+            flex: 1;
+            border-radius: 16px;
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-subtle);
+            color: var(--text-primary);
+            font-size: 13px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            cursor: pointer;
+            transition: all 0.12s;
+        }
+
+        .click-btn:active {
+            transform: scale(0.96);
+            background: rgba(56, 189, 248, 0.18);
+            border-color: var(--border-accent);
+        }
+
+        /* Quick Keys Tab */
+        .keys-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+        }
+
+        .key-btn {
+            background: var(--bg-elevated);
+            border: 1px solid var(--border-subtle);
+            border-radius: 12px;
+            padding: 14px 6px;
+            text-align: center;
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--text-primary);
+            cursor: pointer;
+            transition: transform 0.1s, background 0.15s, border-color 0.15s;
+        }
+
+        .key-btn:active {
+            transform: scale(0.92);
+            background: rgba(56, 189, 248, 0.2);
+            border-color: var(--border-accent);
+        }
+
+        .key-btn.wide {
+            grid-column: span 2;
+        }
+
+        /* Modal Confirmation */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.75);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            z-index: 1000;
+        }
+
+        .modal-box {
+            background: #0F172A;
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 22px;
+            padding: 24px;
+            width: 100%;
+            max-width: 340px;
+            text-align: center;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.6);
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        .modal-title {
             font-size: 18px;
             font-weight: 700;
-            min-height: 64px;
+            color: var(--text-primary);
         }
 
-        button:active {
-            transform: scale(0.97);
+        .modal-desc {
+            font-size: 13px;
+            color: var(--text-secondary);
+            line-height: 1.4;
         }
 
-        .wide {
-            grid-column: span 3;
-        }
-
-        .auth {
-            display: grid;
+        .modal-actions {
+            display: flex;
             gap: 10px;
-            margin-bottom: 18px;
+            margin-top: 6px;
         }
 
-        input {
-            border: 0;
+        .modal-btn {
+            flex: 1;
+            padding: 12px;
             border-radius: 12px;
-            font-size: 16px;
-            padding: 14px;
+            font-size: 14px;
+            font-weight: 700;
+            border: none;
+            cursor: pointer;
         }
 
-        .message {
-            min-height: 22px;
+        .modal-btn.cancel {
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--text-primary);
+        }
+
+        .modal-btn.confirm-danger {
+            background: var(--accent-rose);
+            color: #fff;
+        }
+
+        .modal-btn.confirm-warning {
+            background: var(--accent-amber);
+            color: #070B14;
+        }
+
+        /* Toast Feedback */
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            left: 50%;
+            transform: translateX(-50%) translateY(100px);
+            background: rgba(15, 23, 42, 0.95);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--border-accent);
+            color: var(--text-primary);
+            padding: 10px 18px;
+            border-radius: 999px;
+            font-size: 13px;
+            font-weight: 600;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.4);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.3s;
+            opacity: 0;
+            pointer-events: none;
+            z-index: 999;
+        }
+
+        .toast.show {
+            transform: translateX(-50%) translateY(0);
+            opacity: 1;
         }
     </style>
 </head>
 <body>
-    <main>
-        <h1>PC Remote</h1>
-        <section class="auth">
-            <input id="password" type="password" placeholder="Password">
-            <button onclick="connect()">Connect</button>
-            <div id="message" class="message">Enter password to unlock controls.</div>
-        </section>
-        <section id="controls" class="grid">
-            <button onclick="send('voldown')">Vol -</button>
-            <button onclick="send('mute')">Mute</button>
-            <button onclick="send('volup')">Vol +</button>
-            <button onclick="send('brightdown')">Dim</button>
-            <button onclick="send('brightup')">Bright +</button>
-            <button onclick="send('startmenu')">Start</button>
-            <button onclick="send('desktop')">Desktop</button>
-            <button onclick="send('screenoff')">Screen Off</button>
-            <button onclick="send('lock')">Lock</button>
-            <button onclick="send('sleep')">Sleep</button>
-            <button onclick="send('restart')">Restart</button>
-            <button class="wide" onclick="send('shutdown')">Shutdown</button>
-        </section>
-    </main>
+    <div class="app-container">
+        <!-- Modern App Header -->
+        <header class="app-header">
+            <div class="brand-block">
+                <div class="brand-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <rect x="2" y="3" width="20" height="14" rx="2"></rect>
+                        <line x1="8" y1="21" x2="16" y2="21"></line>
+                        <line x1="12" y1="17" x2="12" y2="21"></line>
+                    </svg>
+                </div>
+                <div>
+                    <h1 class="brand-title" id="serverNameTitle">Remote PC</h1>
+                    <div class="brand-subtitle" id="connectionInfo">Web Controller</div>
+                </div>
+            </div>
+            <div id="statusPill" class="status-pill offline">
+                <span class="status-dot"></span>
+                <span id="statusLabel">Offline</span>
+            </div>
+        </header>
+
+        <!-- Authentication Screen -->
+        <div id="authScreen" class="glass-card auth-card">
+            <div class="auth-shield">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="28" height="28" stroke-width="2">
+                    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                    <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                </svg>
+            </div>
+            <h2 class="auth-title">Authentication Required</h2>
+            <p class="auth-desc">Enter your server password or PIN code to unlock wireless PC remote control deck.</p>
+            
+            <div class="auth-input-group">
+                <input id="passwordInput" class="auth-input" type="password" placeholder="Enter Password / PIN" autocomplete="current-password" autofocus>
+            </div>
+            <button class="btn-connect" onclick="connectToServer()">Connect to PC</button>
+            <div id="authMessage" class="auth-status-msg">Enter password to unlock</div>
+        </div>
+
+        <!-- Main Controller View -->
+        <div id="mainView" class="hidden">
+            <!-- Navigation Tabs -->
+            <nav class="tab-bar">
+                <button class="tab-btn active" onclick="switchTab('controls')">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <line x1="4" y1="21" x2="4" y2="14"></line>
+                        <line x1="4" y1="10" x2="4" y2="3"></line>
+                        <line x1="12" y1="21" x2="12" y2="12"></line>
+                        <line x1="12" y1="8" x2="12" y2="3"></line>
+                        <line x1="20" y1="21" x2="20" y2="16"></line>
+                        <line x1="20" y1="12" x2="20" y2="3"></line>
+                        <line x1="1" y1="14" x2="7" y2="14"></line>
+                        <line x1="9" y1="8" x2="15" y2="8"></line>
+                        <line x1="17" y1="16" x2="23" y2="16"></line>
+                    </svg>
+                    <span>Controls</span>
+                </button>
+                <button class="tab-btn" onclick="switchTab('trackpad')">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <rect x="5" y="2" width="14" height="20" rx="7"></rect>
+                        <line x1="12" y1="6" x2="12" y2="10"></line>
+                    </svg>
+                    <span>Trackpad</span>
+                </button>
+                <button class="tab-btn" onclick="switchTab('keys')">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <rect x="2" y="4" width="20" height="16" rx="2"></rect>
+                        <line x1="6" y1="8" x2="6" y2="8"></line>
+                        <line x1="10" y1="8" x2="10" y2="8"></line>
+                        <line x1="14" y1="8" x2="14" y2="8"></line>
+                        <line x1="18" y1="8" x2="18" y2="8"></line>
+                        <line x1="7" y1="16" x2="17" y2="16"></line>
+                    </svg>
+                    <span>Keys</span>
+                </button>
+                <button class="tab-btn" onclick="switchTab('power')">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                        <path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path>
+                        <line x1="12" y1="2" x2="12" y2="12"></line>
+                    </svg>
+                    <span>Power</span>
+                </button>
+            </nav>
+
+            <!-- Tab 1: Controls Screen -->
+            <div id="tab-controls" class="screen-content">
+                <!-- Hardware Sliders (Volume & Brightness) -->
+                <div class="glass-card slider-section">
+                    <!-- Volume Slider -->
+                    <div class="slider-group">
+                        <div class="slider-meta">
+                            <span>Speaker Volume</span>
+                            <span id="volumeVal" class="slider-val-badge">50%</span>
+                        </div>
+                        <div class="slider-row">
+                            <button class="slider-icon-btn" onclick="send('mute')" title="Mute">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="18" height="18">
+                                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                                    <line x1="23" y1="9" x2="17" y2="15"></line>
+                                    <line x1="17" y1="9" x2="23" y2="15"></line>
+                                </svg>
+                            </button>
+                            <input id="volumeSlider" class="slider-input" type="range" min="0" max="100" value="50" oninput="onVolumeSlide(this.value)">
+                            <button class="slider-icon-btn" onclick="send('volup')" title="Volume Up">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="18" height="18">
+                                    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                                    <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Brightness Slider -->
+                    <div class="slider-group">
+                        <div class="slider-meta">
+                            <span>Display Brightness</span>
+                            <span id="brightnessVal" class="slider-val-badge">75%</span>
+                        </div>
+                        <div class="slider-row">
+                            <button class="slider-icon-btn" onclick="send('brightdown')" title="Dim">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="18" height="18">
+                                    <circle cx="12" cy="12" r="5"></circle>
+                                    <line x1="12" y1="1" x2="12" y2="3"></line>
+                                    <line x1="12" y1="21" x2="12" y2="23"></line>
+                                </svg>
+                            </button>
+                            <input id="brightnessSlider" class="slider-input" type="range" min="0" max="100" value="75" oninput="onBrightnessSlide(this.value)">
+                            <button class="slider-icon-btn" onclick="send('brightup')" title="Brighten">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="18" height="18">
+                                    <circle cx="12" cy="12" r="5"></circle>
+                                    <line x1="12" y1="1" x2="12" y2="3"></line>
+                                    <line x1="12" y1="21" x2="12" y2="23"></line>
+                                    <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                                    <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                                    <line x1="1" y1="12" x2="3" y2="12"></line>
+                                    <line x1="21" y1="12" x2="23" y2="12"></line>
+                                    <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                                    <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                                </svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Media Player Deck -->
+                <div class="glass-card media-deck">
+                    <span class="media-title">Media Controls</span>
+                    <div class="media-buttons">
+                        <button class="media-btn" onclick="send('prev')" title="Previous Track">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <polygon points="19 20 9 12 19 4 19 20"></polygon>
+                                <line x1="5" y1="19" x2="5" y2="5"></line>
+                            </svg>
+                        </button>
+                        <button class="media-btn play-main" onclick="send('play')" title="Play / Pause">
+                            <svg viewBox="0 0 24 24">
+                                <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                            </svg>
+                        </button>
+                        <button class="media-btn" onclick="send('next')" title="Next Track">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <polygon points="5 4 15 12 5 20 5 4"></polygon>
+                                <line x1="19" y1="5" x2="19" y2="19"></line>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Quick Actions Grid -->
+                <div class="section-title">Quick Actions</div>
+                <div class="actions-grid">
+                    <div class="action-tile" onclick="send('desktop')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect>
+                            <line x1="9" y1="3" x2="9" y2="21"></line>
+                        </svg>
+                        <span>Desktop</span>
+                    </div>
+                    <div class="action-tile" onclick="send('startmenu')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <rect x="3" y="3" width="8" height="8" rx="1"></rect>
+                            <rect x="13" y="3" width="8" height="8" rx="1"></rect>
+                            <rect x="3" y="13" width="8" height="8" rx="1"></rect>
+                            <rect x="13" y="13" width="8" height="8" rx="1"></rect>
+                        </svg>
+                        <span>Start Menu</span>
+                    </div>
+                    <div class="action-tile" onclick="send('screenoff')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <rect x="2" y="3" width="20" height="14" rx="2"></rect>
+                            <line x1="2" y1="20" x2="22" y2="20"></line>
+                        </svg>
+                        <span>Screen Off</span>
+                    </div>
+                    <div class="action-tile" onclick="send('lock')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                            <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                        </svg>
+                        <span>Lock PC</span>
+                    </div>
+                    <div class="action-tile" onclick="send('mute')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                            <line x1="23" y1="9" x2="17" y2="15"></line>
+                            <line x1="17" y1="9" x2="23" y2="15"></line>
+                        </svg>
+                        <span>Toggle Mute</span>
+                    </div>
+                    <div class="action-tile warning" onclick="confirmAction('sleep', 'Sleep PC', 'Put the PC to sleep now?')">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                        </svg>
+                        <span>Sleep</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab 2: Trackpad Screen -->
+            <div id="tab-trackpad" class="screen-content hidden">
+                <div class="glass-card trackpad-deck">
+                    <div id="touchpadSurface" class="trackpad-area">
+                        <div class="trackpad-hint">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" width="18" height="18">
+                                <path d="M12 2v20M2 12h20"></path>
+                            </svg>
+                            <span>Slide finger to move mouse • Tap to Click</span>
+                        </div>
+                    </div>
+                    <div class="trackpad-buttons">
+                        <button class="click-btn" onclick="sendMouseClick('left')">
+                            <span>Left Click</span>
+                        </button>
+                        <button class="click-btn" onclick="sendMouseClick('double')">
+                            <span>Double</span>
+                        </button>
+                        <button class="click-btn" onclick="sendMouseClick('right')">
+                            <span>Right Click</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab 3: Quick Keys -->
+            <div id="tab-keys" class="screen-content hidden">
+                <div class="section-title">Navigation & Modifiers</div>
+                <div class="keys-grid">
+                    <button class="key-btn" onclick="sendKey('Escape')">Esc</button>
+                    <button class="key-btn" onclick="sendKey('Tab')">Tab</button>
+                    <button class="key-btn" onclick="send('startmenu')">Win</button>
+                    <button class="key-btn" onclick="sendKey('Backspace')">Del</button>
+                    <button class="key-btn wide" onclick="sendKey('Enter')">Enter</button>
+                    <button class="key-btn wide" onclick="sendKey('Space')">Space</button>
+                </div>
+
+                <div class="section-title">Shortcuts</div>
+                <div class="keys-grid">
+                    <button class="key-btn" onclick="sendShortcut('copy')">Ctrl+C</button>
+                    <button class="key-btn" onclick="sendShortcut('paste')">Ctrl+V</button>
+                    <button class="key-btn" onclick="sendShortcut('alttab')">Alt+Tab</button>
+                    <button class="key-btn" onclick="send('desktop')">Win+D</button>
+                </div>
+
+                <div class="section-title">Arrows</div>
+                <div class="keys-grid">
+                    <div style="grid-column: span 1"></div>
+                    <button class="key-btn" onclick="sendKey('Up')">▲</button>
+                    <div style="grid-column: span 2"></div>
+                    <button class="key-btn" onclick="sendKey('Left')">◀</button>
+                    <button class="key-btn" onclick="sendKey('Down')">▼</button>
+                    <button class="key-btn" onclick="sendKey('Right')">▶</button>
+                </div>
+            </div>
+
+            <!-- Tab 4: Power Screen -->
+            <div id="tab-power" class="screen-content hidden">
+                <div class="glass-card" style="display:flex; flex-direction:column; gap:12px;">
+                    <div class="section-title">System Power Actions</div>
+                    <div class="actions-grid" style="grid-template-columns: repeat(2, 1fr);">
+                        <div class="action-tile" onclick="send('lock')">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
+                                <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
+                            </svg>
+                            <span>Lock Session</span>
+                        </div>
+                        <div class="action-tile warning" onclick="confirmAction('sleep', 'Sleep PC', 'Put the computer into low-power sleep mode?')">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                            </svg>
+                            <span>Sleep PC</span>
+                        </div>
+                        <div class="action-tile warning" onclick="confirmAction('restart', 'Restart PC', 'Reboot the computer immediately?')">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <polyline points="23 4 23 10 17 10"></polyline>
+                                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"></path>
+                            </svg>
+                            <span>Restart PC</span>
+                        </div>
+                        <div class="action-tile danger" onclick="confirmAction('shutdown', 'Shutdown PC', 'Shut down the computer completely?')">
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                                <path d="M18.36 6.64a9 9 0 1 1-12.73 0"></path>
+                                <line x1="12" y1="2" x2="12" y2="12"></line>
+                            </svg>
+                            <span>Shutdown</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="glass-card" style="text-align: center; margin-top: 8px;">
+                    <button class="modal-btn cancel" style="width: 100%;" onclick="disconnect()">
+                        Disconnect & Lock Deck
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Confirmation Modal -->
+    <div id="confirmModal" class="modal-overlay hidden">
+        <div class="modal-box">
+            <h3 id="modalTitle" class="modal-title">Confirm Action</h3>
+            <p id="modalDesc" class="modal-desc">Are you sure you want to proceed?</p>
+            <div class="modal-actions">
+                <button class="modal-btn cancel" onclick="closeModal()">Cancel</button>
+                <button id="modalConfirmBtn" class="modal-btn confirm-danger" onclick="executeConfirmedAction()">Proceed</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Feedback Toast -->
+    <div id="appToast" class="toast">
+        <span id="toastMsg">Action executed</span>
+    </div>
 
     <script>
-        const passwordInput = document.getElementById('password');
-        const controls = document.getElementById('controls');
-        const message = document.getElementById('message');
-        passwordInput.value = localStorage.getItem('remotePassword') || '';
+        const passwordInput = document.getElementById('passwordInput');
+        const authScreen = document.getElementById('authScreen');
+        const mainView = document.getElementById('mainView');
+        const authMessage = document.getElementById('authMessage');
+        const statusPill = document.getElementById('statusPill');
+        const statusLabel = document.getElementById('statusLabel');
+        const serverNameTitle = document.getElementById('serverNameTitle');
+        const connectionInfo = document.getElementById('connectionInfo');
+        const appToast = document.getElementById('appToast');
+        const toastMsg = document.getElementById('toastMsg');
+
         let authenticated = false;
+        let pendingCommand = null;
+        let volumeDebounce = null;
+        let brightnessDebounce = null;
 
-        async function connect() {
-            const password = passwordInput.value;
-            const response = await fetch('/status', {
-                headers: {'X-Remote-Password': password}
-            });
+        // Auto-fill password if remembered
+        passwordInput.value = localStorage.getItem('remotePassword') || '';
 
-            if (!response.ok) {
-                authenticated = false;
-                controls.classList.remove('unlocked');
-                localStorage.removeItem('remotePassword');
-                message.textContent = response.status === 401 ? 'Wrong password. Access denied.' : 'Could not connect.';
-                return;
+        function vibrate(ms = 12) {
+            if (navigator.vibrate) {
+                try { navigator.vibrate(ms); } catch (_) {}
             }
-
-            authenticated = true;
-            localStorage.setItem('remotePassword', password);
-            controls.classList.add('unlocked');
-            message.textContent = 'Connected. Controls unlocked.';
         }
 
-        async function send(command) {
-            if (!authenticated) {
-                message.textContent = 'Enter correct password first.';
-                return;
-            }
+        function showToast(msg) {
+            toastMsg.textContent = msg;
+            appToast.classList.add('show');
+            setTimeout(() => appToast.classList.remove('show'), 2200);
+        }
 
+        async function connectToServer() {
             const password = passwordInput.value;
-            const response = await fetch(`/${command}`, {
-                headers: {'X-Remote-Password': password}
-            });
-            if (!response.ok) {
-                if (response.status === 401) {
+            authMessage.textContent = 'Verifying security credentials...';
+            authMessage.style.color = 'var(--primary)';
+
+            try {
+                const response = await fetch('/status', {
+                    headers: { 'X-Remote-Password': password }
+                });
+
+                if (!response.ok) {
                     authenticated = false;
-                    controls.classList.remove('unlocked');
                     localStorage.removeItem('remotePassword');
-                    message.textContent = 'Wrong password. Access denied.';
+                    authMessage.textContent = response.status === 401 
+                        ? 'Incorrect password. Access denied.' 
+                        : 'Connection error (' + response.status + ')';
+                    authMessage.style.color = 'var(--accent-rose)';
+                    statusPill.className = 'status-pill offline';
+                    statusLabel.textContent = 'Offline';
+                    vibrate([40, 40, 40]);
                     return;
                 }
-                alert(`Command failed: ${command}`);
+
+                const data = await response.json();
+                authenticated = true;
+                localStorage.setItem('remotePassword', password);
+
+                // Update UI state
+                authScreen.classList.add('hidden');
+                mainView.classList.remove('hidden');
+                statusPill.className = 'status-pill';
+                statusLabel.textContent = 'Online';
+                vibrate(20);
+
+                if (data.name || data.server) {
+                    serverNameTitle.textContent = data.name || data.server;
+                }
+                connectionInfo.textContent = 'Connected • Port ' + (data.port || 5055);
+                showToast('Connected to ' + (data.name || 'Remote PC'));
+
+                // Fetch initial volume & brightness if available
+                if (data.volume !== undefined) {
+                    document.getElementById('volumeSlider').value = data.volume;
+                    document.getElementById('volumeVal').textContent = data.volume + '%';
+                }
+                if (data.brightness !== undefined) {
+                    document.getElementById('brightnessSlider').value = data.brightness;
+                    document.getElementById('brightnessVal').textContent = data.brightness + '%';
+                }
+
+            } catch (err) {
+                authenticated = false;
+                authMessage.textContent = 'Failed to reach PC server. Check Wi-Fi.';
+                authMessage.style.color = 'var(--accent-rose)';
+                statusPill.className = 'status-pill offline';
+                statusLabel.textContent = 'Offline';
             }
         }
 
+        function disconnect() {
+            authenticated = false;
+            localStorage.removeItem('remotePassword');
+            mainView.classList.add('hidden');
+            authScreen.classList.remove('hidden');
+            authMessage.textContent = 'Disconnected. Enter password to connect.';
+            authMessage.style.color = 'var(--text-muted)';
+            statusPill.className = 'status-pill offline';
+            statusLabel.textContent = 'Locked';
+            vibrate(15);
+        }
+
+        async function send(command, customLabel) {
+            vibrate(10);
+            if (!authenticated) {
+                showToast('Please authenticate first');
+                return;
+            }
+
+            const password = passwordInput.value;
+            try {
+                const response = await fetch('/' + command, {
+                    headers: { 'X-Remote-Password': password }
+                });
+
+                if (!response.ok) {
+                    if (response.status === 401) {
+                        disconnect();
+                        return;
+                    }
+                    showToast('Command error: ' + command);
+                    return;
+                }
+                showToast(customLabel || ('✓ ' + command.charAt(0).toUpperCase() + command.slice(1)));
+            } catch (err) {
+                showToast('Network error');
+            }
+        }
+
+        function onVolumeSlide(val) {
+            document.getElementById('volumeVal').textContent = val + '%';
+            clearTimeout(volumeDebounce);
+            volumeDebounce = setTimeout(() => {
+                send('volume/' + val, 'Volume ' + val + '%');
+            }, 120);
+        }
+
+        function onBrightnessSlide(val) {
+            document.getElementById('brightnessVal').textContent = val + '%';
+            clearTimeout(brightnessDebounce);
+            brightnessDebounce = setTimeout(() => {
+                send('brightness/' + val, 'Brightness ' + val + '%');
+            }, 120);
+        }
+
+        function sendMouseClick(type) {
+            vibrate(15);
+            send('mouse/' + type + '-click', type.toUpperCase() + ' Click');
+        }
+
+        function sendKey(key) {
+            vibrate(10);
+            send('key/press?key=' + encodeURIComponent(key), 'Key: ' + key);
+        }
+
+        function sendShortcut(shortcut) {
+            vibrate(12);
+            send('shortcut/' + shortcut, 'Shortcut: ' + shortcut);
+        }
+
+        // Tab Switching
+        function switchTab(tabId) {
+            vibrate(8);
+            const tabs = ['controls', 'trackpad', 'keys', 'power'];
+            tabs.forEach(t => {
+                const el = document.getElementById('tab-' + t);
+                if (el) el.classList.toggle('hidden', t !== tabId);
+            });
+
+            document.querySelectorAll('.tab-btn').forEach((btn, index) => {
+                btn.classList.toggle('active', tabs[index] === tabId);
+            });
+        }
+
+        // Confirmation Modal Dialog
+        function confirmAction(cmd, title, desc) {
+            vibrate(25);
+            pendingCommand = cmd;
+            document.getElementById('modalTitle').textContent = title;
+            document.getElementById('modalDesc').textContent = desc;
+            const confirmBtn = document.getElementById('modalConfirmBtn');
+            confirmBtn.className = cmd === 'shutdown' ? 'modal-btn confirm-danger' : 'modal-btn confirm-warning';
+            document.getElementById('confirmModal').classList.remove('hidden');
+        }
+
+        function closeModal() {
+            vibrate(8);
+            document.getElementById('confirmModal').classList.add('hidden');
+            pendingCommand = null;
+        }
+
+        function executeConfirmedAction() {
+            if (pendingCommand) {
+                const cmd = pendingCommand;
+                closeModal();
+                send(cmd, 'Executing ' + cmd + '...');
+            }
+        }
+
+        // Virtual Touchpad Touch Handling
+        const touchpad = document.getElementById('touchpadSurface');
+        let touchStartX = 0;
+        let touchStartY = 0;
+        let lastTouchTime = 0;
+        let touchMoved = false;
+
+        touchpad.addEventListener('touchstart', (e) => {
+            if (e.touches.length === 1) {
+                touchStartX = e.touches[0].clientX;
+                touchStartY = e.touches[0].clientY;
+                touchMoved = false;
+            }
+        }, { passive: true });
+
+        touchpad.addEventListener('touchmove', (e) => {
+            if (e.touches.length === 1 && authenticated) {
+                const dx = (e.touches[0].clientX - touchStartX) * 1.5;
+                const dy = (e.touches[0].clientY - touchStartY) * 1.5;
+                touchStartX = e.touches[0].clientX;
+                touchStartY = e.touches[0].clientY;
+
+                if (Math.abs(dx) > 1 || Math.abs(dy) > 1) {
+                    touchMoved = true;
+                    // Fire throttled mouse move
+                    const password = passwordInput.value;
+                    fetch('/mouse/move?dx=' + dx.toFixed(1) + '&dy=' + dy.toFixed(1), {
+                        headers: { 'X-Remote-Password': password }
+                    }).catch(() => {});
+                }
+            }
+        }, { passive: true });
+
+        touchpad.addEventListener('touchend', (e) => {
+            const now = Date.now();
+            if (!touchMoved && (now - lastTouchTime < 300)) {
+                // Double tap
+                sendMouseClick('double');
+                lastTouchTime = 0;
+            } else if (!touchMoved) {
+                // Single tap
+                sendMouseClick('left');
+                lastTouchTime = now;
+            }
+        });
+
+        // Password Enter submission
+        passwordInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') connectToServer();
+        });
+
+        // Auto-connect if password remembered
         if (passwordInput.value) {
-            connect();
+            connectToServer();
         }
     </script>
 </body>

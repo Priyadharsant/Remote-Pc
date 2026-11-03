@@ -1,6 +1,6 @@
 {
   "name": "remote-pc-workspace",
-  "version": "3.5.0",
+  "version": "3.6.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -16,7 +16,7 @@
     "build:installer": "python build_exe.py --installer-only",
     "build:server": "python build_exe.py --server-only",
     "build:gui": "python build_exe.py --gui-only",
-    "build:apk": "powershell -Command \"Set-Location client; .\\gradlew.bat assembleDebug --build-cache; Copy-Item 'app\\build\\outputs\\apk\\debug\\app-debug.apk' '..\\Remote PC.apk' -Force\"",
+    "build:apk": "powershell -Command \"$env:JAVA_HOME = 'C:\\Program Files\\Android\\Android Studio\\jbr'; Set-Location client; .\\gradlew.bat assembleDebug --build-cache; Copy-Item 'app\\build\\outputs\\apk\\debug\\app-debug.apk' '..\\Remote PC.apk' -Force\"",
     "build:all": "npm run build:apk && npm run build:exe",
     "bump": "node scripts/bump-version.js",
     "version:patch": "node scripts/bump-version.js patch",

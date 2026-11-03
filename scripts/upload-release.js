@@ -206,7 +206,7 @@ async function main() {
           tag_name: tag,
           target_commitish: "main",
           name: `Remote PC ${tag}`,
-          body: `### Remote PC ${tag}\n\n- **Zero-Latency Wireless Trackpad & Keyboard**: Real-time cursor control and keyboard emulation\n- **Live Audio & Brightness Controls**: High-speed slider synchronization between Mobile and PC\n- **1-Tap QR & PIN Handshake**: Instant zero-leak device authorization\n- **10s Media Playback Seeking**: Instant forward/backward skip for YouTube, VLC, and video streaming\n- **In-App & In-EXE Auto-Updater**: High-speed parallel chunk updates for Android APK and Windows Setup EXE\n- **Direct Storage Explorer**: High-speed wireless file browsing, download, and streaming`,
+          body: `### Remote PC ${tag}\n\n- 🎨 **Ultra-Modern UI Overhaul**: Cohesive glassmorphic design system with deep space theme, vibrant neon accents, and backdrop blur across all apps\n- 🌐 **Enhanced Web Remote Deck**: Responsive touch deck with dedicated tabs for Controls, Trackpad with gestures, Keyboard shortcuts, and Power actions\n- 🖥️ **Elevated Desktop Suite**: Gradient telemetry meters (CPU, RAM, Battery), pulsing live pills, and refined sidebar navigation\n- 📱 **Modern Android Jetpack Compose**: Redesigned device cards, tactile action tiles, mechanical keycaps, and frosted sheets\n- ⚡ **Zero-Latency Wireless Trackpad & Keyboard**: Ultra-fast real-time cursor control and hotkey emulation\n- 📁 **Direct Storage Explorer & File Sharing**: High-speed wireless file browsing, streaming, and drag-and-drop transfers`,
           draft: false,
           prerelease: false,
         }),
@@ -226,6 +226,8 @@ async function main() {
 
   const exePath = path.join(ROOT_DIR, "Remote_PC_Setup.exe");
   const apkPath = path.join(ROOT_DIR, "Remote PC.apk");
+  const debPath = path.join(ROOT_DIR, "Remote_PC_Ubuntu_amd64.deb");
+  const tarPath = path.join(ROOT_DIR, "Remote_PC_Linux_x86_64.tar.gz");
 
   if (!isApkOnly && !fs.existsSync(exePath)) {
     if (isExeOnly) {
@@ -245,9 +247,11 @@ async function main() {
 
   const hasExe = !isApkOnly && fs.existsSync(exePath);
   const hasApk = !isExeOnly && fs.existsSync(apkPath);
+  const hasDeb = !isExeOnly && !isApkOnly && fs.existsSync(debPath);
+  const hasTar = !isExeOnly && !isApkOnly && fs.existsSync(tarPath);
 
-  if (!hasExe && !hasApk) {
-    throw new Error("No release binaries found (neither Remote_PC_Setup.exe nor Remote PC.apk).");
+  if (!hasExe && !hasApk && !hasDeb && !hasTar) {
+    throw new Error("No release binaries found.");
   }
 
   const checksumLines = [];
@@ -280,6 +284,18 @@ async function main() {
     checksumLines.push(`${computeSha256(apkPath)}  Remote PC.apk`);
   }
 
+  if (hasDeb) {
+    const debStats = fs.statSync(debPath);
+    console.log(`Found Ubuntu / Debian:   Remote_PC_Ubuntu_amd64.deb (${(debStats.size / (1024 * 1024)).toFixed(1)} MB)`);
+    checksumLines.push(`${computeSha256(debPath)}  Remote_PC_Ubuntu_amd64.deb`);
+  }
+
+  if (hasTar) {
+    const tarStats = fs.statSync(tarPath);
+    console.log(`Found Linux Generic:     Remote_PC_Linux_x86_64.tar.gz (${(tarStats.size / (1024 * 1024)).toFixed(1)} MB)`);
+    checksumLines.push(`${computeSha256(tarPath)}  Remote_PC_Linux_x86_64.tar.gz`);
+  }
+
   // Generate checksums.txt
   checksumLines.push("");
   const checksumPath = path.join(ROOT_DIR, "checksums.txt");
@@ -295,6 +311,16 @@ async function main() {
       localPath: apkPath,
       name: "Remote PC.apk",
       contentType: "application/vnd.android.package-archive",
+    },
+    hasDeb && {
+      localPath: debPath,
+      name: "Remote_PC_Ubuntu_amd64.deb",
+      contentType: "application/vnd.debian.binary-package",
+    },
+    hasTar && {
+      localPath: tarPath,
+      name: "Remote_PC_Linux_x86_64.tar.gz",
+      contentType: "application/gzip",
     },
     latestYmlPath && {
       localPath: latestYmlPath,

@@ -2,8 +2,9 @@ import React from 'react';
 import type { LucideIcon } from 'lucide-react';
 import {
   Server, Smartphone, Sliders, FolderSync, FolderOpen, Shield, Settings as SettingsIcon,
-  Video
+  Video, Sparkles
 } from 'lucide-react';
+import { APP_VERSION } from '../version';
 
 export type TabKey =
   | 'server'
@@ -68,12 +69,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
   ];
 
   return (
-    <aside className="w-60 bg-[#070C16] border-r border-cyan-500/15 flex flex-col justify-between p-3 select-none overflow-y-auto">
+    <aside className="w-60 bg-[#070B14]/90 backdrop-blur-xl border-r border-cyan-500/15 flex flex-col justify-between p-3 select-none overflow-y-auto">
       <div className="space-y-4">
         {sections.map((sec, idx) => (
           <div key={idx} className="space-y-1">
-            <div className="px-3 py-1 text-[9px] font-bold uppercase tracking-wider text-slate-500">
-              {sec.title}
+            <div className="px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider text-slate-500 flex items-center justify-between">
+              <span>{sec.title}</span>
             </div>
             {sec.items.map((item) => {
               const Icon = item.icon;
@@ -82,23 +83,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 <button
                   key={item.key}
                   onClick={() => onTabChange(item.key)}
-                  className={`w-full flex items-center justify-between px-3 py-2 rounded-xl font-medium text-xs transition-all ${
+                  className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl font-medium text-xs transition-all relative overflow-hidden group ${
                     isActive
-                      ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-500/30 shadow-sm shadow-cyan-500/10'
-                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/50'
+                      ? 'bg-gradient-to-r from-cyan-500/20 to-blue-500/10 text-cyan-300 border border-cyan-500/30 shadow-md shadow-cyan-500/10'
+                      : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/40'
                   }`}
                 >
+                  {/* Subtle active left accent pip */}
+                  {isActive && (
+                    <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-5 bg-gradient-to-b from-cyan-400 to-blue-500 rounded-r-full" />
+                  )}
                   <div className="flex items-center gap-2.5">
-                    <Icon size={15} className={isActive ? 'text-cyan-400' : 'text-slate-400'} />
-                    <span>{item.label}</span>
+                    <Icon size={16} className={`transition-transform duration-200 group-hover:scale-110 ${isActive ? 'text-cyan-400' : 'text-slate-400'}`} />
+                    <span className="tracking-tight">{item.label}</span>
                   </div>
                   {item.badge && (
-                    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-slate-950 animate-bounce">
+                    <span className="px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-500 text-slate-950 animate-bounce shadow-sm">
                       {item.badge}
                     </span>
                   )}
                   {item.highlight && !item.badge && (
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-live-pulse shadow-[0_0_8px_rgba(52,211,153,0.8)]" />
                   )}
                 </button>
               );
@@ -108,9 +113,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Bottom Info badge */}
-      <div className="p-3 rounded-xl bg-slate-900/60 border border-slate-800/80 text-[11px] text-slate-400 mt-3">
-        <div className="font-semibold text-slate-300">Remote PC v3.2</div>
-        <div className="text-[10px] text-slate-500 mt-0.5">Secure Local Connection</div>
+      <div className="p-3 rounded-2xl bg-gradient-to-br from-slate-900/80 to-[#0B1120] border border-cyan-500/10 text-[11px] text-slate-400 mt-3 shadow-inner">
+        <div className="flex items-center justify-between">
+          <div className="font-semibold text-slate-200 flex items-center gap-1.5">
+            <Sparkles size={12} className="text-cyan-400" />
+            <span>Remote PC</span>
+          </div>
+          <span className="px-1.5 py-0.5 rounded-md bg-cyan-500/10 border border-cyan-500/20 text-[9px] font-mono text-cyan-300 font-semibold">
+            v{APP_VERSION}
+          </span>
+        </div>
+        <div className="text-[10px] text-slate-500 mt-1">Zero-Lag Wireless Remote</div>
       </div>
     </aside>
   );

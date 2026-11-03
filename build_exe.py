@@ -194,7 +194,7 @@ def build(args):
     # 3. Inno Setup Bundle
     if build_installer:
         iss_file = os.path.join(ROOT_DIR, "installer.iss")
-        if os.path.exists(ISCC_PATH) and os.path.exists(iss_file):
+        if ISCC_PATH and os.path.exists(ISCC_PATH) and os.path.exists(iss_file):
             compression = "lzma2/max" if args.max_compression else "lzma2/fast"
             print("\n" + "=" * 60)
             print(f" 📦 Building 3/3: Single Windows Setup EXE (Inno Setup: {compression})")

@@ -72,19 +72,19 @@ export const TitleBar: React.FC<TitleBarProps> = ({
   };
 
   return (
-    <div className="titlebar-drag h-10 w-full bg-[#070C16] border-b border-cyan-500/15 flex items-center justify-between px-3 select-none text-xs z-50">
+    <div className="titlebar-drag h-10 w-full bg-[#070B14]/90 backdrop-blur-md border-b border-cyan-500/15 flex items-center justify-between px-3 select-none text-xs z-50">
       {/* Left: Branding & Status */}
       <div className="flex items-center gap-2.5 titlebar-no-drag">
-        <div className="w-5 h-5 rounded-md bg-gradient-to-br from-cyan-400 to-blue-600 flex items-center justify-center text-white shadow-sm shadow-cyan-500/20">
+        <div className="w-5 h-5 rounded-md bg-gradient-to-br from-cyan-400 to-blue-600 flex items-center justify-center text-white shadow-sm shadow-cyan-500/30">
           <Monitor size={12} className="stroke-[2.5]" />
         </div>
-        <span className="font-bold text-slate-200 tracking-wide text-[13px]">Remote PC</span>
+        <span className="font-bold text-slate-100 tracking-wide text-[13px]">Remote PC</span>
         <div className="h-3 w-px bg-slate-700/60 mx-0.5" />
         <span className="text-[11px] text-slate-400 font-medium hidden sm:inline">Desktop Suite</span>
 
         {/* Live Status Pill */}
-        <div className="flex items-center gap-1.5 ml-2 px-2 py-0.5 rounded-full bg-slate-800/80 border border-slate-700/50">
-          <span className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'}`} />
+        <div className="flex items-center gap-1.5 ml-2 px-2.5 py-0.5 rounded-full bg-slate-900/90 border border-slate-700/50 shadow-inner">
+          <span className={`w-2 h-2 rounded-full ${isOnline ? 'bg-emerald-400 animate-live-pulse shadow-[0_0_8px_rgba(52,211,153,0.8)]' : 'bg-rose-500'}`} />
           <span className={`text-[10px] font-semibold uppercase tracking-wider ${isOnline ? 'text-emerald-300' : 'text-rose-400'}`}>
             {isOnline ? 'Online' : 'Stopped'}
           </span>
@@ -125,8 +125,8 @@ export const TitleBar: React.FC<TitleBarProps> = ({
         )}
 
         {connectedPhone && (
-          <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-cyan-950/60 border border-cyan-500/30 text-cyan-300 text-[10px] font-medium">
-            <span>📱</span>
+          <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-cyan-950/70 border border-cyan-500/30 text-cyan-300 text-[10px] font-medium shadow-sm">
+            <span className="text-[11px]">📱</span>
             <span>{connectedPhone}</span>
           </div>
         )}

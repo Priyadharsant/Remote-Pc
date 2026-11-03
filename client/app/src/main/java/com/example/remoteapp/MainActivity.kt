@@ -2206,10 +2206,10 @@ fun LiquidDeviceCard(device: Pair<String, String>, onClick: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .clickable { onClick() },
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = AppTheme.CardDark),
-        border = BorderStroke(1.dp, AppTheme.CardBorderSubtle),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = AppTheme.CardDarkElevated),
+        border = BorderStroke(1.dp, AppTheme.CardBorderGlow.copy(alpha = 0.35f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
     ) {
         Row(
             modifier = Modifier
@@ -2219,14 +2219,14 @@ fun LiquidDeviceCard(device: Pair<String, String>, onClick: () -> Unit) {
         ) {
             Box(
                 modifier = Modifier
-                    .size(50.dp)
+                    .size(52.dp)
                     .clip(CircleShape)
                     .background(
                         Brush.linearGradient(
-                            listOf(AppTheme.AccentCyan.copy(alpha = 0.25f), AppTheme.AccentSky.copy(alpha = 0.08f))
+                            listOf(AppTheme.AccentCyan.copy(alpha = 0.22f), AppTheme.AccentSky.copy(alpha = 0.08f))
                         )
                     )
-                    .border(1.dp, AppTheme.AccentCyan.copy(alpha = 0.4f), CircleShape),
+                    .border(1.dp, AppTheme.AccentCyan.copy(alpha = 0.45f), CircleShape),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
@@ -2260,7 +2260,8 @@ fun LiquidDeviceCard(device: Pair<String, String>, onClick: () -> Unit) {
                 modifier = Modifier
                     .size(36.dp)
                     .clip(CircleShape)
-                    .background(Color(0xFF1E293B)),
+                    .background(AppTheme.CardDarkHighlight)
+                    .border(1.dp, AppTheme.CardBorderSubtle, CircleShape),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
@@ -2542,12 +2543,12 @@ fun RemoteControlScreen(
 fun LiquidActionTile(title: String, icon: ImageVector, color: Color, modifier: Modifier, onClick: () -> Unit) {
     Card(
         modifier = modifier
-            .height(86.dp)
+            .height(90.dp)
             .clickable { onClick() },
-        shape = RoundedCornerShape(14.dp),
-        colors = CardDefaults.cardColors(containerColor = AppTheme.CardDark),
-        border = BorderStroke(1.dp, AppTheme.CardBorderSubtle),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = AppTheme.CardDarkElevated),
+        border = BorderStroke(1.dp, color.copy(alpha = 0.25f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
     ) {
         Column(
             modifier = Modifier.fillMaxSize(),
@@ -2556,9 +2557,10 @@ fun LiquidActionTile(title: String, icon: ImageVector, color: Color, modifier: M
         ) {
             Box(
                 modifier = Modifier
-                    .size(38.dp)
+                    .size(42.dp)
                     .clip(CircleShape)
-                    .background(color.copy(alpha = 0.12f)),
+                    .background(color.copy(alpha = 0.16f))
+                    .border(1.dp, color.copy(alpha = 0.35f), CircleShape),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(icon, contentDescription = null, tint = color, modifier = Modifier.size(22.dp))
@@ -2592,9 +2594,10 @@ fun LiquidSliderCard(
     }
 
     Card(
-        shape = RoundedCornerShape(16.dp),
-        colors = CardDefaults.cardColors(containerColor = AppTheme.CardDark),
-        border = BorderStroke(1.dp, AppTheme.CardBorderSubtle),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = AppTheme.CardDarkElevated),
+        border = BorderStroke(1.dp, accentColor.copy(alpha = 0.25f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
         modifier = Modifier.fillMaxWidth()
     ) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -3347,9 +3350,10 @@ fun KeyBtn(
         onClick = onClick,
         colors = ButtonDefaults.buttonColors(containerColor = containerColor),
         border = BorderStroke(1.dp, borderColor),
-        shape = RoundedCornerShape(10.dp),
+        shape = RoundedCornerShape(12.dp),
+        elevation = ButtonDefaults.buttonElevation(defaultElevation = 2.dp),
         contentPadding = PaddingValues(horizontal = 4.dp, vertical = 6.dp),
-        modifier = modifier.height(46.dp)
+        modifier = modifier.height(48.dp)
     ) {
         Text(
             label,
@@ -5211,7 +5215,7 @@ fun LiquidPasswordDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = AppTheme.CardDarkElevated,
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(24.dp),
         title = {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(
@@ -5334,7 +5338,7 @@ fun LiquidConfirmDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = AppTheme.CardDarkElevated,
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(24.dp),
         icon = {
             Box(
                 modifier = Modifier

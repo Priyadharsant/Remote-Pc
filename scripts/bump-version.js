@@ -25,6 +25,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, "..");
 const FINANCE_ENV_PATH = "D:/Projects/Finance_Application/.env";
 
+if (!process.env.JAVA_HOME || !fs.existsSync(process.env.JAVA_HOME)) {
+  const androidJbr = "C:\\Program Files\\Android\\Android Studio\\jbr";
+  if (fs.existsSync(androidJbr)) {
+    process.env.JAVA_HOME = androidJbr;
+  }
+}
+
 function loadEnvToken() {
   if (process.env.GH_TOKEN) return process.env.GH_TOKEN.trim();
   if (process.env.GITHUB_TOKEN) return process.env.GITHUB_TOKEN.trim();
