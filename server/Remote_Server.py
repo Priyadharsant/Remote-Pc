@@ -1830,6 +1830,15 @@ def discovery_server() -> None:
                         sock.sendto(resp, (address[0], DISCOVERY_PORT))
                     except Exception:
                         pass
+                elif message.startswith("AIRPULSE_DISCOVER"):
+                    pin_val = AIRPULSE_PIN if AIRPULSE_RECEIVE_MODE else ""
+                    rec_val = "1" if AIRPULSE_RECEIVE_MODE else "0"
+                    resp = f"AIRPULSE_PEER|{SERVER_NAME}|{PORT}|{sys.platform}|{rec_val}|{pin_val}".encode()
+                    sock.sendto(resp, address)
+                    try:
+                        sock.sendto(resp, (address[0], DISCOVERY_PORT))
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
@@ -2353,6 +2362,457 @@ def read_text_file(path: str = Query(...), max_bytes: int = 500000) -> dict:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+# ==============================================================================
+# AIRPULSE: CROSS-DEVICE PEER-TO-PEER FILE TRANSFER ENGINE
+# ==============================================================================
+
+AIRPULSE_RECEIVE_MODE = False
+AIRPULSE_PIN = ""
+AIRPULSE_PENDING_REQUESTS: dict = {}
+AIRPULSE_ACTIVE_TRANSFERS: dict = {}
+AIRPULSE_TRANSFERS_DIR = os.path.join(os.path.expanduser("~"), "Downloads", "RemotePC_Transfers")
+os.makedirs(AIRPULSE_TRANSFERS_DIR, exist_ok=True)
+
+def generate_airpulse_pin() -> str:
+    val = secrets.randbelow(900000) + 100000
+    return str(val)
+
+def discover_airpulse_peers(timeout: float = 1.2) -> list:
+    peers = []
+    seen_ips = set()
+    lan_ip = get_lan_ip()
+    seen_ips.add(lan_ip)
+    seen_ips.add("127.0.0.1")
+
+    # 1. Connected/active clients
+    for cl in list(CLIENTS.values()):
+        ip = cl.get("ip")
+        if ip and ip not in seen_ips:
+            peers.append({
+                "name": cl.get("device_name") or f"Device ({ip})",
+                "ip": ip,
+                "port": 5056 if cl.get("os") == "android" else 5055,
+                "os": cl.get("os", "android"),
+                "receive_mode": False,
+                "pin": ""
+            })
+            seen_ips.add(ip)
+
+    # 2. UDP Broadcast probe
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            sock.settimeout(0.3)
+            msg = b"AIRPULSE_DISCOVER"
+            for bcast in ["255.255.255.255"]:
+                try:
+                    sock.sendto(msg, (bcast, DISCOVERY_PORT))
+                except Exception:
+                    pass
+
+            start_t = time.time()
+            while time.time() - start_t < timeout:
+                try:
+                    data, addr = sock.recvfrom(1024)
+                    ip = addr[0]
+                    if ip in seen_ips:
+                        continue
+                    text = data.decode(errors="ignore").strip()
+                    if text.startswith("AIRPULSE_PEER|"):
+                        parts = text.split("|")
+                        name = parts[1] if len(parts) > 1 else f"Peer ({ip})"
+                        port = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 5055
+                        os_type = parts[3] if len(parts) > 3 else "unknown"
+                        rec_mode = parts[4] == "1" if len(parts) > 4 else False
+                        pin = parts[5] if len(parts) > 5 else ""
+                        peers.append({
+                            "name": name,
+                            "ip": ip,
+                            "port": port,
+                            "os": os_type,
+                            "receive_mode": rec_mode,
+                            "pin": pin
+                        })
+                        seen_ips.add(ip)
+                    elif text.startswith("REMOTE_SERVER|"):
+                        parts = text.split("|")
+                        name = parts[1] if len(parts) > 1 else f"PC ({ip})"
+                        port = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 5055
+                        peers.append({
+                            "name": name,
+                            "ip": ip,
+                            "port": port,
+                            "os": "windows" if "win" in sys.platform else "pc",
+                            "receive_mode": False,
+                            "pin": ""
+                        })
+                        seen_ips.add(ip)
+                except socket.timeout:
+                    break
+                except Exception:
+                    pass
+    except Exception as e:
+        log_server_event(f"AirPulse peer discovery error: {e}", "WARNING")
+
+    return peers
+
+@app.get('/airpulse/status')
+def get_airpulse_status() -> dict:
+    global AIRPULSE_PIN
+    if AIRPULSE_RECEIVE_MODE and not AIRPULSE_PIN:
+        AIRPULSE_PIN = generate_airpulse_pin()
+    return {
+        "status": "ok",
+        "device_name": SERVER_NAME,
+        "os": sys.platform,
+        "ip": get_lan_ip(),
+        "port": PORT,
+        "receive_mode": AIRPULSE_RECEIVE_MODE,
+        "pin": AIRPULSE_PIN,
+        "save_dir": AIRPULSE_TRANSFERS_DIR
+    }
+
+@app.post('/airpulse/receive-mode')
+async def toggle_airpulse_receive_mode(request: Request) -> dict:
+    global AIRPULSE_RECEIVE_MODE, AIRPULSE_PIN
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    enabled = body.get("enabled", not AIRPULSE_RECEIVE_MODE)
+    AIRPULSE_RECEIVE_MODE = bool(enabled)
+    if AIRPULSE_RECEIVE_MODE:
+        AIRPULSE_PIN = generate_airpulse_pin()
+    else:
+        AIRPULSE_PIN = ""
+    log_server_event(f"AirPulse receive mode: {AIRPULSE_RECEIVE_MODE} (PIN: {AIRPULSE_PIN})", "INFO")
+    return {
+        "status": "ok",
+        "receive_mode": AIRPULSE_RECEIVE_MODE,
+        "pin": AIRPULSE_PIN,
+        "device_name": SERVER_NAME,
+        "ip": get_lan_ip(),
+        "port": PORT,
+        "save_dir": AIRPULSE_TRANSFERS_DIR
+    }
+
+@app.get('/airpulse/peers')
+def get_airpulse_peers() -> dict:
+    peers = discover_airpulse_peers()
+    return {"status": "ok", "peers": peers}
+
+@app.post('/airpulse/request')
+async def handle_airpulse_request(request: Request) -> dict:
+    global AIRPULSE_PENDING_REQUESTS
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload")
+
+    sender_name = payload.get("sender_name", "Unknown Device")
+    sender_ip = payload.get("sender_ip", request.client.host if request.client else "")
+    sender_os = payload.get("sender_os", "unknown")
+    pin = str(payload.get("pin", "")).strip()
+    files = payload.get("files", [])
+    total_size = payload.get("total_size", 0)
+    total_count = payload.get("total_count", len(files))
+
+    req_id = str(uuid.uuid4())[:8]
+
+    # If Receiver Mode is active and PIN matches: Auto-accept immediately!
+    if AIRPULSE_RECEIVE_MODE and pin and pin == AIRPULSE_PIN:
+        transfer_id = f"tx_{str(uuid.uuid4())[:8]}"
+        AIRPULSE_ACTIVE_TRANSFERS[transfer_id] = {
+            "id": transfer_id,
+            "sender_name": sender_name,
+            "direction": f"{sender_name} ➔ {SERVER_NAME}",
+            "transferred_bytes": 0,
+            "total_bytes": total_size,
+            "current_file": files[0]["name"] if files else "file",
+            "file_index": 1,
+            "total_files": total_count,
+            "speed_mb": 0.0,
+            "percent": 0,
+            "status": "in_progress",
+            "message": "Connected via PIN"
+        }
+        log_server_event(f"AirPulse: PIN transfer auto-accepted from {sender_name}", "INFO")
+        return {
+            "status": "accepted",
+            "request_id": req_id,
+            "transfer_id": transfer_id,
+            "save_dir": AIRPULSE_TRANSFERS_DIR
+        }
+
+    # Otherwise queue as pending incoming request for receiver confirmation
+    AIRPULSE_PENDING_REQUESTS[req_id] = {
+        "id": req_id,
+        "sender_name": sender_name,
+        "sender_ip": sender_ip,
+        "sender_os": sender_os,
+        "files": files,
+        "total_size": total_size,
+        "total_count": total_count,
+        "timestamp": time.time(),
+        "status": "pending",
+        "transfer_id": None
+    }
+    log_server_event(f"AirPulse: Incoming transfer request from {sender_name} ({total_count} files, {total_size} bytes)", "INFO")
+    return {"status": "pending", "request_id": req_id}
+
+@app.get('/airpulse/check-request')
+def check_airpulse_request(request_id: str = Query(...)) -> dict:
+    req = AIRPULSE_PENDING_REQUESTS.get(request_id)
+    if not req:
+        return {"status": "not_found"}
+    return {
+        "status": req["status"],
+        "transfer_id": req.get("transfer_id")
+    }
+
+@app.get('/airpulse/pending-incoming')
+def get_pending_incoming() -> dict:
+    now = time.time()
+    expired = [k for k, v in AIRPULSE_PENDING_REQUESTS.items() if now - v.get("timestamp", 0) > 45]
+    for k in expired:
+        AIRPULSE_PENDING_REQUESTS.pop(k, None)
+
+    pending = [v for v in AIRPULSE_PENDING_REQUESTS.values() if v.get("status") == "pending"]
+    if pending:
+        return {"has_incoming": True, "request": pending[-1]}
+    return {"has_incoming": False, "request": None}
+
+@app.post('/airpulse/respond-request')
+async def respond_to_request(request: Request) -> dict:
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    req_id = body.get("request_id")
+    action = body.get("action", "decline")
+    req = AIRPULSE_PENDING_REQUESTS.get(req_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="Request not found or expired")
+
+    if action == "accept":
+        transfer_id = f"tx_{str(uuid.uuid4())[:8]}"
+        req["status"] = "accepted"
+        req["transfer_id"] = transfer_id
+        AIRPULSE_ACTIVE_TRANSFERS[transfer_id] = {
+            "id": transfer_id,
+            "sender_name": req["sender_name"],
+            "direction": f"{req['sender_name']} ➔ {SERVER_NAME}",
+            "transferred_bytes": 0,
+            "total_bytes": req["total_size"],
+            "current_file": req["files"][0]["name"] if req["files"] else "file",
+            "file_index": 1,
+            "total_files": req["total_count"],
+            "speed_mb": 0.0,
+            "percent": 0,
+            "status": "in_progress",
+            "message": "Starting download..."
+        }
+        log_server_event(f"AirPulse: Transfer accepted for {req['sender_name']}", "INFO")
+        return {"status": "accepted", "transfer_id": transfer_id}
+    else:
+        req["status"] = "declined"
+        log_server_event(f"AirPulse: Transfer declined from {req['sender_name']}", "INFO")
+        return {"status": "declined"}
+
+@app.post('/airpulse/upload')
+async def airpulse_upload_file(
+    request: Request,
+    transfer_id: str = Query(default=""),
+    filename: str = Query(default=""),
+    file_index: int = Query(default=1),
+    total_files: int = Query(default=1),
+    file_size: int = Query(default=0)
+):
+    os.makedirs(AIRPULSE_TRANSFERS_DIR, exist_ok=True)
+    clean_name = os.path.basename(filename) if filename else f"airpulse_{int(time.time())}"
+    base, ext = os.path.splitext(clean_name)
+    save_path = os.path.join(AIRPULSE_TRANSFERS_DIR, clean_name)
+    counter = 1
+    while os.path.exists(save_path):
+        save_path = os.path.join(AIRPULSE_TRANSFERS_DIR, f"{base} ({counter}){ext}")
+        counter += 1
+
+    t_info = AIRPULSE_ACTIVE_TRANSFERS.get(transfer_id)
+    if t_info:
+        t_info["current_file"] = os.path.basename(save_path)
+        t_info["file_index"] = file_index
+        t_info["total_files"] = total_files
+
+    t0 = time.time()
+    bytes_written = 0
+    with open(save_path, "wb") as f:
+        async for chunk in request.stream():
+            f.write(chunk)
+            bytes_written += len(chunk)
+            if t_info:
+                t_info["transferred_bytes"] += len(chunk)
+                dt = time.time() - t0
+                if dt >= 0.2:
+                    speed = (bytes_written / (1024 * 1024)) / max(dt, 0.01)
+                    t_info["speed_mb"] = round(speed, 1)
+                    if t_info["total_bytes"] > 0:
+                        t_info["percent"] = min(100, int((t_info["transferred_bytes"] * 100) / t_info["total_bytes"]))
+
+    if t_info and file_index >= total_files:
+        t_info["status"] = "completed"
+        t_info["percent"] = 100
+        t_info["message"] = f"Finished saving to {AIRPULSE_TRANSFERS_DIR}"
+
+    log_server_event(f"AirPulse: Received {os.path.basename(save_path)} ({bytes_written} bytes)", "INFO")
+    return {"status": "ok", "saved_path": save_path, "bytes": bytes_written}
+
+@app.post('/airpulse/send-files')
+async def airpulse_send_files(request: Request) -> dict:
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    target_ip = body.get("target_ip")
+    target_port = int(body.get("target_port", 5055))
+    pin = body.get("pin", "")
+    file_paths = body.get("file_paths", [])
+
+    if not target_ip or not file_paths:
+        raise HTTPException(status_code=400, detail="Target IP and file paths are required")
+
+    valid_files = []
+    total_size = 0
+    for p in file_paths:
+        if os.path.exists(p) and os.path.isfile(p):
+            sz = os.path.getsize(p)
+            valid_files.append({"path": p, "name": os.path.basename(p), "size": sz})
+            total_size += sz
+
+    if not valid_files:
+        raise HTTPException(status_code=404, detail="No valid files found to send")
+
+    tx_id = f"tx_send_{str(uuid.uuid4())[:8]}"
+    AIRPULSE_ACTIVE_TRANSFERS[tx_id] = {
+        "id": tx_id,
+        "direction": f"{SERVER_NAME} ➔ {target_ip}",
+        "transferred_bytes": 0,
+        "total_bytes": total_size,
+        "current_file": valid_files[0]["name"],
+        "file_index": 1,
+        "total_files": len(valid_files),
+        "speed_mb": 0.0,
+        "percent": 0,
+        "status": "requesting",
+        "message": f"Connecting to {target_ip}..."
+    }
+
+    def send_worker():
+        try:
+            req_url = f"http://{target_ip}:{target_port}/airpulse/request"
+            req_data = json.dumps({
+                "sender_name": SERVER_NAME,
+                "sender_os": sys.platform,
+                "sender_ip": get_lan_ip(),
+                "pin": pin,
+                "files": [{"name": vf["name"], "size": vf["size"]} for vf in valid_files],
+                "total_size": total_size,
+                "total_count": len(valid_files)
+            }).encode('utf-8')
+
+            req = urllib.request.Request(req_url, data=req_data, headers={"Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                resp_data = json.loads(resp.read().decode('utf-8'))
+
+            status = resp_data.get("status")
+            remote_tx_id = resp_data.get("transfer_id")
+            request_id = resp_data.get("request_id")
+
+            if status == "pending" and request_id:
+                AIRPULSE_ACTIVE_TRANSFERS[tx_id]["message"] = "Waiting for receiver approval..."
+                poll_start = time.time()
+                while time.time() - poll_start < 40:
+                    time.sleep(1.0)
+                    if AIRPULSE_ACTIVE_TRANSFERS[tx_id]["status"] == "cancelled":
+                        return
+                    chk_url = f"http://{target_ip}:{target_port}/airpulse/check-request?request_id={request_id}"
+                    try:
+                        with urllib.request.urlopen(chk_url, timeout=5) as c_resp:
+                            c_data = json.loads(c_resp.read().decode('utf-8'))
+                            if c_data.get("status") == "accepted":
+                                status = "accepted"
+                                remote_tx_id = c_data.get("transfer_id")
+                                break
+                            elif c_data.get("status") == "declined":
+                                status = "declined"
+                                break
+                    except Exception:
+                        pass
+
+            if status != "accepted":
+                AIRPULSE_ACTIVE_TRANSFERS[tx_id]["status"] = "declined" if status == "declined" else "error"
+                AIRPULSE_ACTIVE_TRANSFERS[tx_id]["message"] = "Receiver declined transfer" if status == "declined" else "Connection timed out"
+                return
+
+            AIRPULSE_ACTIVE_TRANSFERS[tx_id]["status"] = "in_progress"
+            AIRPULSE_ACTIVE_TRANSFERS[tx_id]["message"] = "Streaming files..."
+            transferred_so_far = 0
+
+            for idx, vf in enumerate(valid_files, 1):
+                if AIRPULSE_ACTIVE_TRANSFERS[tx_id]["status"] == "cancelled":
+                    break
+                AIRPULSE_ACTIVE_TRANSFERS[tx_id]["current_file"] = vf["name"]
+                AIRPULSE_ACTIVE_TRANSFERS[tx_id]["file_index"] = idx
+
+                if target_port == 5056:
+                    upload_url = f"http://{target_ip}:{target_port}/airpulse/upload?filename={urllib.parse.quote(vf['name'])}&file_index={idx}&total_files={len(valid_files)}&file_size={vf['size']}"
+                else:
+                    upload_url = f"http://{target_ip}:{target_port}/airpulse/upload?transfer_id={remote_tx_id or tx_id}&filename={urllib.parse.quote(vf['name'])}&file_index={idx}&total_files={len(valid_files)}&file_size={vf['size']}"
+
+                file_start = time.time()
+                with open(vf["path"], "rb") as f:
+                    file_bytes = f.read()
+
+                u_req = urllib.request.Request(upload_url, data=file_bytes, headers={"Content-Type": "application/octet-stream"})
+                with urllib.request.urlopen(u_req, timeout=120) as u_resp:
+                    _ = u_resp.read()
+
+                transferred_so_far += vf["size"]
+                AIRPULSE_ACTIVE_TRANSFERS[tx_id]["transferred_bytes"] = transferred_so_far
+                dt = time.time() - file_start
+                if dt > 0:
+                    AIRPULSE_ACTIVE_TRANSFERS[tx_id]["speed_mb"] = round((vf["size"] / (1024 * 1024)) / dt, 1)
+                if total_size > 0:
+                    AIRPULSE_ACTIVE_TRANSFERS[tx_id]["percent"] = min(100, int((transferred_so_far * 100) / total_size))
+
+            AIRPULSE_ACTIVE_TRANSFERS[tx_id]["status"] = "completed"
+            AIRPULSE_ACTIVE_TRANSFERS[tx_id]["percent"] = 100
+            AIRPULSE_ACTIVE_TRANSFERS[tx_id]["message"] = "All files transferred successfully!"
+        except Exception as e:
+            AIRPULSE_ACTIVE_TRANSFERS[tx_id]["status"] = "error"
+            AIRPULSE_ACTIVE_TRANSFERS[tx_id]["message"] = f"Transfer failed: {str(e)}"
+
+    threading.Thread(target=send_worker, daemon=True).start()
+    return {"status": "ok", "transfer_id": tx_id}
+
+@app.get('/airpulse/transfer-status')
+def get_airpulse_transfer_status(transfer_id: str = Query(...)) -> dict:
+    t = AIRPULSE_ACTIVE_TRANSFERS.get(transfer_id)
+    if not t:
+        return {"status": "not_found"}
+    return t
+
+@app.post('/airpulse/cancel-transfer')
+def cancel_airpulse_transfer(transfer_id: str = Query(...)) -> dict:
+    t = AIRPULSE_ACTIVE_TRANSFERS.get(transfer_id)
+    if t:
+        t["status"] = "cancelled"
+        t["message"] = "Cancelled by user"
+        return {"status": "ok"}
+    return {"status": "not_found"}
+
+
 # ==============================================================================
 # Wireless AnyDesk-Style Remote Desktop & Audio Streaming Endpoints
 # ==============================================================================

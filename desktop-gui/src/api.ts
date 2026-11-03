@@ -1,6 +1,7 @@
 import type {
   ServerStatus, SystemStats, TrustedDevice, PhoneFileItem, PairingRequest,
-  PhoneDeviceInfo, CameraRecordingStatus, CameraRecordingItem
+  PhoneDeviceInfo, CameraRecordingStatus, CameraRecordingItem,
+  AirPulseStatus, AirPulsePeer, AirPulseIncomingRequest, AirPulseTransferProgress
 } from './types';
 
 const BASE_URL = 'http://127.0.0.1:5055';
@@ -428,6 +429,84 @@ export const api = {
       return data.history || [];
     } catch {
       return [];
+    }
+  },
+
+  // --- AirPulse Cross-Device File Transfer ---
+  async getAirPulseStatus(): Promise<AirPulseStatus> {
+    const res = await fetch(`${BASE_URL}/airpulse/status`);
+    if (!res.ok) throw new Error('Failed to get AirPulse status');
+    return res.json();
+  },
+
+  async toggleAirPulseReceiveMode(enabled: boolean): Promise<AirPulseStatus> {
+    const res = await fetch(`${BASE_URL}/airpulse/receive-mode`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled })
+    });
+    if (!res.ok) throw new Error('Failed to toggle AirPulse receive mode');
+    return res.json();
+  },
+
+  async getAirPulsePeers(): Promise<AirPulsePeer[]> {
+    try {
+      const res = await fetch(`${BASE_URL}/airpulse/peers`);
+      if (!res.ok) return [];
+      const data = await res.json();
+      return data.peers || [];
+    } catch {
+      return [];
+    }
+  },
+
+  async getAirPulsePendingIncoming(): Promise<{ has_incoming: boolean; request: AirPulseIncomingRequest | null }> {
+    try {
+      const res = await fetch(`${BASE_URL}/airpulse/pending-incoming`);
+      if (!res.ok) return { has_incoming: false, request: null };
+      return res.json();
+    } catch {
+      return { has_incoming: false, request: null };
+    }
+  },
+
+  async respondToAirPulseRequest(requestId: string, action: 'accept' | 'decline'): Promise<{ status: string; transfer_id?: string }> {
+    const res = await fetch(`${BASE_URL}/airpulse/respond-request`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ request_id: requestId, action })
+    });
+    if (!res.ok) throw new Error('Failed to respond to transfer request');
+    return res.json();
+  },
+
+  async sendAirPulseFiles(payload: { target_ip: string; target_port?: number; pin?: string; file_paths: string[] }): Promise<{ status: string; transfer_id: string }> {
+    const res = await fetch(`${BASE_URL}/airpulse/send-files`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to initiate transfer' }));
+      throw new Error(err.detail || 'Failed to initiate transfer');
+    }
+    return res.json();
+  },
+
+  async getAirPulseTransferStatus(transferId: string): Promise<AirPulseTransferProgress> {
+    const res = await fetch(`${BASE_URL}/airpulse/transfer-status?transfer_id=${encodeURIComponent(transferId)}`);
+    if (!res.ok) throw new Error('Failed to get transfer status');
+    return res.json();
+  },
+
+  async cancelAirPulseTransfer(transferId: string): Promise<boolean> {
+    try {
+      const res = await fetch(`${BASE_URL}/airpulse/cancel-transfer?transfer_id=${encodeURIComponent(transferId)}`, {
+        method: 'POST'
+      });
+      return res.ok;
+    } catch {
+      return false;
     }
   }
 };

@@ -162,6 +162,53 @@ export interface CameraRecordingItem {
   created_timestamp: number;
 }
 
+export interface AirPulsePeer {
+  name: string;
+  ip: string;
+  port: number;
+  os: 'windows' | 'android' | 'linux' | 'unknown' | string;
+  receive_mode: boolean;
+  pin?: string;
+}
+
+export interface AirPulseStatus {
+  status: string;
+  device_name: string;
+  os: string;
+  ip: string;
+  port: number;
+  receive_mode: boolean;
+  pin: string;
+  save_dir: string;
+}
+
+export interface AirPulseIncomingRequest {
+  id: string;
+  sender_name: string;
+  sender_ip: string;
+  sender_os: string;
+  files: Array<{ name: string; size: number; type?: string }>;
+  total_size: number;
+  total_count: number;
+  timestamp: number;
+  status: 'pending' | 'accepted' | 'declined';
+  transfer_id?: string;
+}
+
+export interface AirPulseTransferProgress {
+  id: string;
+  direction: string;
+  transferred_bytes: number;
+  total_bytes: number;
+  current_file: string;
+  file_index: number;
+  total_files: number;
+  speed_mb: number;
+  percent: number;
+  status: 'requesting' | 'in_progress' | 'completed' | 'declined' | 'error' | 'cancelled' | 'not_found';
+  message?: string;
+}
+
 declare global {
   interface Window {
     electronAPI?: {

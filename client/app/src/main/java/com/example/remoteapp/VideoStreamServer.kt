@@ -34,11 +34,18 @@ class VideoStreamServer(
     private val resolver: ContentResolver = context.contentResolver
     private var isTorchOn = false
 
+    @Volatile var airPulseReceiveMode: Boolean = false
+    @Volatile var airPulsePin: String = ""
+    var onAirPulseRequest: ((JSONObject, (Boolean) -> Unit) -> Unit)? = null
+
     companion object {
         private const val TAG = "VideoStreamServer"
         private var instance: VideoStreamServer? = null
         @Volatile var activeStreamingId: Long? = null
         @Volatile var activeStreamingTime: Long = 0L
+
+        @Synchronized
+        fun getInstance(): VideoStreamServer? = instance
 
         @Synchronized
         fun startServer(
@@ -355,6 +362,74 @@ class VideoStreamServer(
                 if (success) {
                     Handler(Looper.getMainLooper()).post {
                         Toast.makeText(context, "📥 Received $cleanName from PC\nSaved in Downloads/RemotePC", Toast.LENGTH_LONG).show()
+                    }
+                    sendJsonResponse(out, "{\"status\":\"ok\",\"filename\":\"$cleanName\"}")
+                } else {
+                    out.write("HTTP/1.1 500 Internal Server Error\r\n\r\nFailed to save file".toByteArray())
+                    out.flush()
+                }
+                return
+            } else if (uri.startsWith("/airpulse/status")) {
+                val json = "{\"status\":\"ok\",\"device_name\":\"${Build.MODEL}\",\"os\":\"android\",\"port\":$port,\"receive_mode\":$airPulseReceiveMode,\"pin\":\"$airPulsePin\"}"
+                sendJsonResponse(out, json)
+                return
+            } else if (uri.startsWith("/airpulse/receive-mode")) {
+                val enabled = uri.contains("enabled=true") || uri.contains("enabled=1")
+                airPulseReceiveMode = enabled
+                if (enabled && airPulsePin.isEmpty()) {
+                    airPulsePin = String.format(Locale.US, "%06d", (100000..999999).random())
+                } else if (!enabled) {
+                    airPulsePin = ""
+                }
+                val json = "{\"status\":\"ok\",\"receive_mode\":$airPulseReceiveMode,\"pin\":\"$airPulsePin\"}"
+                sendJsonResponse(out, json)
+                return
+            } else if (uri.startsWith("/airpulse/request")) {
+                val bodyStr = readStringBody(rawIn, contentLength)
+                val bodyJson = try { JSONObject(bodyStr) } catch (_: Exception) { JSONObject() }
+                val pin = bodyJson.optString("pin", "")
+
+                if (airPulseReceiveMode && pin.isNotEmpty() && pin == airPulsePin) {
+                    val txId = "tx_" + java.util.UUID.randomUUID().toString().take(8)
+                    sendJsonResponse(out, "{\"status\":\"accepted\",\"transfer_id\":\"$txId\"}")
+                    return
+                }
+
+                val lock = Object()
+                var userAccepted = false
+                val callback: (Boolean) -> Unit = { accepted ->
+                    synchronized(lock) {
+                        userAccepted = accepted
+                        lock.notifyAll()
+                    }
+                }
+
+                if (onAirPulseRequest != null) {
+                    onAirPulseRequest?.invoke(bodyJson, callback)
+                    synchronized(lock) {
+                        try {
+                            lock.wait(35000L)
+                        } catch (_: Exception) {}
+                    }
+                } else if (airPulseReceiveMode) {
+                    userAccepted = true
+                }
+
+                if (userAccepted) {
+                    val txId = "tx_" + java.util.UUID.randomUUID().toString().take(8)
+                    sendJsonResponse(out, "{\"status\":\"accepted\",\"transfer_id\":\"$txId\"}")
+                } else {
+                    sendJsonResponse(out, "{\"status\":\"declined\"}")
+                }
+                return
+            } else if (uri.startsWith("/airpulse/upload")) {
+                val filenameParam = uri.substringAfter("filename=", "file_${System.currentTimeMillis()}").substringBefore("&")
+                val decodedName = try { URLDecoder.decode(filenameParam, "UTF-8") } catch (_: Exception) { filenameParam }
+                val cleanName = File(decodedName).name
+                val success = saveUploadedFile(cleanName, contentLength, rawIn)
+                if (success) {
+                    Handler(Looper.getMainLooper()).post {
+                        Toast.makeText(context, "📥 AirPulse: Received $cleanName\nSaved in Downloads/RemotePC", Toast.LENGTH_LONG).show()
                     }
                     sendJsonResponse(out, "{\"status\":\"ok\",\"filename\":\"$cleanName\"}")
                 } else {
@@ -801,6 +876,18 @@ class VideoStreamServer(
             if (length > 0) remaining -= r
         }
         output.flush()
+    }
+
+    private fun readStringBody(input: InputStream, length: Long): String {
+        if (length <= 0) return ""
+        val bytes = ByteArray(length.toInt().coerceAtMost(64 * 1024))
+        var total = 0
+        while (total < bytes.size) {
+            val r = input.read(bytes, total, bytes.size - total)
+            if (r == -1) break
+            total += r
+        }
+        return String(bytes, 0, total, Charsets.UTF_8)
     }
 }
 

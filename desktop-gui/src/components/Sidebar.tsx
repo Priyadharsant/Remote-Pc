@@ -2,12 +2,13 @@ import React from 'react';
 import type { LucideIcon } from 'lucide-react';
 import {
   Server, Smartphone, Sliders, FolderSync, FolderOpen, Shield, Settings as SettingsIcon,
-  Video, Sparkles
+  Video, Sparkles, Radio
 } from 'lucide-react';
 import { APP_VERSION } from '../version';
 
 export type TabKey =
   | 'server'
+  | 'airpulse'
   | 'mobile-info'
   | 'camera-record'
   | 'folder-sync'
@@ -47,6 +48,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       title: 'COMPUTER & STATUS',
       items: [
         { key: 'server', label: 'Status & Pairing', icon: Server, badge: pendingPairingsCount > 0 ? `${pendingPairingsCount}` : null },
+        { key: 'airpulse', label: 'AirPulse Drop', icon: Radio, badge: 'P2P', highlight: true },
       ]
     },
     {

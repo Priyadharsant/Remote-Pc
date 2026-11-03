@@ -8,6 +8,7 @@ import { CameraRecording } from './components/CameraRecording';
 import { FolderSync } from './components/FolderSync';
 import { MobileControls } from './components/MobileControls';
 import { FileManager } from './components/FileManager';
+import { AirPulse } from './components/AirPulse';
 import { Security } from './components/Security';
 import { Settings } from './components/Settings';
 import { SetupWizard } from './components/SetupWizard';
@@ -245,6 +246,10 @@ export function App() {
               pairRequests={pairRequests}
               onRefresh={fetchAllData}
             />
+          )}
+
+          {activeTab === 'airpulse' && (
+            <AirPulse status={status} />
           )}
 
           {activeTab === 'mobile-info' && (

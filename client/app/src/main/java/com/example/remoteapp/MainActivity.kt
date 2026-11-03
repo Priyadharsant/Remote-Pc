@@ -1189,6 +1189,17 @@ class MainActivity : FragmentActivity() {
                                         ),
                                         modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
                                     )
+                                    NavigationDrawerItem(
+                                        label = { Text("AirPulse Drop", fontWeight = FontWeight.Bold) },
+                                        icon = { Icon(Icons.Rounded.Sensors, null, tint = Color(0xFF06B6D4)) },
+                                        selected = currentScreen == "airpulse",
+                                        onClick = { currentScreen = "airpulse"; scope.launch { drawerState.close() } },
+                                        colors = NavigationDrawerItemDefaults.colors(
+                                            selectedContainerColor = Color(0xFF06B6D4).copy(alpha = 0.2f),
+                                            selectedTextColor = Color(0xFF06B6D4)
+                                        ),
+                                        modifier = Modifier.padding(NavigationDrawerItemDefaults.ItemPadding)
+                                    )
 
                                     Spacer(Modifier.height(8.dp))
                                     Text(
@@ -1236,8 +1247,8 @@ class MainActivity : FragmentActivity() {
                             currentScreen = if (selectedDevice != null) "remote" else "discovery"
                         }
 
-                        BackHandler(enabled = !drawerState.isOpen && currentScreen in listOf("touchpad", "keyboard", "media", "pc_files", "phone_files", "remote_desktop", "camera_record", "folder_sync")) {
-                            currentScreen = "remote"
+                        BackHandler(enabled = !drawerState.isOpen && currentScreen in listOf("touchpad", "keyboard", "media", "pc_files", "phone_files", "remote_desktop", "camera_record", "folder_sync", "airpulse")) {
+                            currentScreen = if (selectedDevice != null) "remote" else "discovery"
                         }
 
                         BackHandler(enabled = !drawerState.isOpen && currentScreen == "remote") {
@@ -1245,7 +1256,7 @@ class MainActivity : FragmentActivity() {
                         }
 
                         // Enforce disconnected view restriction
-                        if (selectedDevice == null && currentScreen !in listOf("discovery", "settings", "setup", "splash")) {
+                        if (selectedDevice == null && currentScreen !in listOf("discovery", "settings", "setup", "splash", "airpulse")) {
                             currentScreen = "discovery"
                         }
 
@@ -1407,6 +1418,7 @@ class MainActivity : FragmentActivity() {
                                         onNavigateRemoteDesktop = { currentScreen = "remote_desktop" },
                                         onNavigateCameraRecord = { currentScreen = "camera_record" },
                                         onNavigateFolderSync = { currentScreen = "folder_sync" },
+                                        onNavigateAirPulse = { currentScreen = "airpulse" },
                                         onBack = { currentScreen = "discovery" },
                                         onMenuClick = { scope.launch { drawerState.open() } }
                                     )
@@ -1495,6 +1507,12 @@ class MainActivity : FragmentActivity() {
                                         targetIp = host,
                                         password = sessionPassword,
                                         onBack = { currentScreen = "remote" },
+                                        onMenuClick = { scope.launch { drawerState.open() } }
+                                    )
+                                }
+                                "airpulse" -> {
+                                    AirPulseScreen(
+                                        onBack = { currentScreen = if (selectedDevice != null) "remote" else "discovery" },
                                         onMenuClick = { scope.launch { drawerState.open() } }
                                     )
                                 }
@@ -2296,6 +2314,7 @@ fun RemoteControlScreen(
     onNavigateRemoteDesktop: () -> Unit = {},
     onNavigateCameraRecord: () -> Unit = {},
     onNavigateFolderSync: () -> Unit = {},
+    onNavigateAirPulse: () -> Unit = {},
     onBack: () -> Unit,
     onMenuClick: () -> Unit
 ) {
@@ -2398,6 +2417,9 @@ fun RemoteControlScreen(
             }
             Spacer(Modifier.height(10.dp))
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                LiquidActionTile("AirPulse Drop", Icons.Rounded.Sensors, Color(0xFF6366F1), Modifier.weight(1f)) {
+                    onNavigateAirPulse()
+                }
                 LiquidActionTile("Auto Folder Sync", Icons.Rounded.Sync, AppTheme.AccentEmerald, Modifier.weight(1f)) {
                     onNavigateFolderSync()
                 }

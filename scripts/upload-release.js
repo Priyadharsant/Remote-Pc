@@ -212,7 +212,7 @@ async function main() {
           tag_name: tag,
           target_commitish: "main",
           name: `Remote PC ${tag}`,
-          body: `### Remote PC ${tag}\n\n- 🎨 **Ultra-Modern UI Overhaul**: Cohesive glassmorphic design system with deep space theme, vibrant neon accents, and backdrop blur across all apps\n- 🌐 **Enhanced Web Remote Deck**: Responsive touch deck with dedicated tabs for Controls, Trackpad with gestures, Keyboard shortcuts, and Power actions\n- 🖥️ **Elevated Desktop Suite**: Gradient telemetry meters (CPU, RAM, Battery), pulsing live pills, and refined sidebar navigation\n- 📱 **Modern Android Jetpack Compose**: Redesigned device cards, tactile action tiles, mechanical keycaps, and frosted sheets\n- ⚡ **Zero-Latency Wireless Trackpad & Keyboard**: Ultra-fast real-time cursor control and hotkey emulation\n- 📁 **Direct Storage Explorer & File Sharing**: High-speed wireless file browsing, streaming, and drag-and-drop transfers`,
+          body: `### Remote PC ${tag}\n\n- 📡 **AirPulse Peer-to-Peer Drop**: Instant cross-device file transfer engine across Mobile, Windows, and Ubuntu with zero cloud dependencies\n- 🎯 **Sonar Radar Receive Mode**: Real-time animated discovery radar for instant nearby peer detection\n- 🔐 **Dual Handshake Pairing**: Secure 6-digit PIN verification and dynamic ZXing QR code pairing\n- 📊 **High-Speed Transfer Engine**: Multi-file batch queue with live speed telemetry, progress HUD, and transfer notifications\n- 🎨 **Modern File Manager Overhaul**: Handcrafted obsidian glass design across both Desktop and Android applications\n- ⚡ **Low-Latency Remote PC Suite**: Responsive trackpad, keyboard shortcuts, media remote, and system controls`,
           draft: false,
           prerelease: false,
         }),
