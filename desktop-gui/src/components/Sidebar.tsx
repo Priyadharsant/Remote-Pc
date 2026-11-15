@@ -2,7 +2,7 @@ import React from 'react';
 import type { LucideIcon } from 'lucide-react';
 import {
   Server, Smartphone, Sliders, FolderSync, FolderOpen, Shield, Settings as SettingsIcon,
-  Video, Sparkles, Radio
+  Video, Radio
 } from 'lucide-react';
 import { APP_VERSION } from '../version';
 
@@ -118,7 +118,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="p-3 rounded-2xl bg-gradient-to-br from-slate-900/80 to-[#0B1120] border border-cyan-500/10 text-[11px] text-slate-400 mt-3 shadow-inner">
         <div className="flex items-center justify-between">
           <div className="font-semibold text-slate-200 flex items-center gap-1.5">
-            <Sparkles size={12} className="text-cyan-400" />
+            <img src="/brand-mark.svg" alt="" className="w-4 h-4 rounded" />
             <span>Remote PC</span>
           </div>
           <span className="px-1.5 py-0.5 rounded-md bg-cyan-500/10 border border-cyan-500/20 text-[9px] font-mono text-cyan-300 font-semibold">

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Minus, Square, X, ArrowDownToLine, Monitor, Play, RefreshCw } from 'lucide-react';
+import { Minus, Square, X, ArrowDownToLine, Play, RefreshCw } from 'lucide-react';
 
 interface TitleBarProps {
   isOnline: boolean;
@@ -75,9 +75,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
     <div className="titlebar-drag h-10 w-full bg-[#070B14]/90 backdrop-blur-md border-b border-cyan-500/15 flex items-center justify-between px-3 select-none text-xs z-50">
       {/* Left: Branding & Status */}
       <div className="flex items-center gap-2.5 titlebar-no-drag">
-        <div className="w-5 h-5 rounded-md bg-gradient-to-br from-cyan-400 to-blue-600 flex items-center justify-center text-white shadow-sm shadow-cyan-500/30">
-          <Monitor size={12} className="stroke-[2.5]" />
-        </div>
+        <img src="/brand-mark.svg" alt="" className="w-5 h-5 rounded-md shadow-sm shadow-blue-500/25" />
         <span className="font-bold text-slate-100 tracking-wide text-[13px]">Remote PC</span>
         <div className="h-3 w-px bg-slate-700/60 mx-0.5" />
         <span className="text-[11px] text-slate-400 font-medium hidden sm:inline">Desktop Suite</span>

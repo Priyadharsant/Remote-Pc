@@ -3,16 +3,19 @@ import time
 
 try:
     from pynput.keyboard import Controller as PynputKeyboardController, Key
-except ImportError:
+except Exception:
     PynputKeyboardController = None
     Key = None
 
-import pyautogui
+from controllers.desktop_input import pyautogui
 
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0
 
-_keyboard = PynputKeyboardController() if PynputKeyboardController is not None else None
+try:
+    _keyboard = PynputKeyboardController() if PynputKeyboardController is not None else None
+except Exception:
+    _keyboard = None
 
 # Windows native Virtual Key codes for reliable system-level hotkey injection (Alt+Tab, Ctrl+Tab, etc.)
 _IS_WINDOWS = sys.platform == "win32"

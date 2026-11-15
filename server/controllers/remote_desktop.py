@@ -9,7 +9,7 @@ from ctypes import wintypes
 import threading
 from typing import List, Dict, Any, Optional, Tuple
 from PIL import Image
-import pyautogui
+from controllers.desktop_input import pyautogui
 import pyperclip
 
 from controllers import mouse, keyboard

@@ -36,8 +36,6 @@ fun SettingsScreen(
     var phoneName by remember { mutableStateOf(SecureStorage.getDeviceName(context)) }
     var autoConnectEnabled by remember { mutableStateOf(SecureStorage.isAutoConnectEnabled(context)) }
     var autostartOnBoot by remember { mutableStateOf(prefs.getBoolean("autostart_on_boot", true)) }
-    var isAutoTheme by remember { mutableStateOf(ThemeState.isAutoTheme) }
-    var isDarkTheme by remember { mutableStateOf(ThemeState.isDark) }
     var showResetConfirm by remember { mutableStateOf(false) }
     var isCheckingUpdate by remember { mutableStateOf(false) }
     var updateInfo by remember { mutableStateOf<GithubReleaseInfo?>(null) }
@@ -294,76 +292,6 @@ fun SettingsScreen(
                 }
             }
 
-            // SECTION 4: APPEARANCE
-            Text("APPEARANCE", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AppTheme.TextMuted, letterSpacing = 1.sp)
-
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = AppTheme.CardDarkElevated),
-                border = BorderStroke(1.dp, AppTheme.CardBorderSubtle)
-            ) {
-                Column(modifier = Modifier.padding(16.dp)) {
-                    // Row 1: Auto-Detect Device Theme
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("Auto-Detect Device Theme", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = AppTheme.TextPrimary)
-                            Text(
-                                if (isAutoTheme) "Active • Following device system appearance (${if (isDarkTheme) "Dark" else "Light"})" else "Disabled • Using manual theme selection",
-                                fontSize = 11.sp,
-                                color = if (isAutoTheme) AppTheme.AccentEmerald else AppTheme.TextSecondary
-                            )
-                        }
-                        Switch(
-                            checked = isAutoTheme,
-                            onCheckedChange = { checked ->
-                                isAutoTheme = checked
-                                ThemeState.isAutoTheme = checked
-                                prefs.edit().putBoolean("auto_theme", checked).apply()
-                                if (checked) {
-                                    val isSystemDark = (context.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
-                                    ThemeState.isDark = isSystemDark
-                                    isDarkTheme = isSystemDark
-                                }
-                            },
-                            colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = AppTheme.AccentCyan)
-                        )
-                    }
-
-                    if (!isAutoTheme) {
-                        Spacer(Modifier.height(14.dp))
-                        HorizontalDivider(color = AppTheme.CardBorderSubtle)
-                        Spacer(Modifier.height(14.dp))
-
-                        // Row 2: Manual Dark/Light switch
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(if (isDarkTheme) "Dark Cyber Theme" else "Light Neumorphic Theme", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = AppTheme.TextPrimary)
-                                Text(if (isDarkTheme) "High contrast deep black" else "Clean modern light style", fontSize = 11.sp, color = AppTheme.TextSecondary)
-                            }
-                            Switch(
-                                checked = isDarkTheme,
-                                onCheckedChange = { checked ->
-                                    isDarkTheme = checked
-                                    ThemeState.isDark = checked
-                                    prefs.edit().putBoolean("dark_mode", checked).apply()
-                                },
-                                colors = SwitchDefaults.colors(checkedThumbColor = Color.White, checkedTrackColor = AppTheme.AccentCyan)
-                            )
-                        }
-                    }
-                }
-            }
-
-            // SECTION: ABOUT & UPDATES
             Text("ABOUT & UPDATES", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AppTheme.AccentCyan, letterSpacing = 1.sp)
 
             Card(

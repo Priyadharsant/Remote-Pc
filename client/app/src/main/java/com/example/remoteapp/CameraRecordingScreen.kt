@@ -1140,7 +1140,7 @@ fun CameraRecordingScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
+            .background(AppTheme.BackgroundDark)
             .pointerInput(Unit) {
                 detectTapGestures {
                     showControls = !showControls
@@ -1245,7 +1245,7 @@ fun CameraRecordingScreen(
                             },
                             modifier = Modifier
                                 .size(44.dp)
-                                .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                                .background(Color.White.copy(alpha = 0.92f), CircleShape)
                         ) {
                             Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = Color.White)
                         }
@@ -1291,7 +1291,7 @@ fun CameraRecordingScreen(
                             // PC Storage & Destination Badge
                             Row(
                                 modifier = Modifier
-                                    .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(20.dp))
+                                    .background(Color.White.copy(alpha = 0.9f), RoundedCornerShape(20.dp))
                                     .padding(horizontal = 12.dp, vertical = 6.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -1320,7 +1320,7 @@ fun CameraRecordingScreen(
                         // Aspect Ratio Switcher Pill (Default 4:3)
                         Row(
                             modifier = Modifier
-                                .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(20.dp))
+                                .background(Color.White.copy(alpha = 0.9f), RoundedCornerShape(20.dp))
                                 .padding(3.dp),
                             horizontalArrangement = Arrangement.spacedBy(3.dp)
                         ) {
@@ -1347,7 +1347,7 @@ fun CameraRecordingScreen(
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(16.dp))
-                                .background(if (showGrid) Color(0xFF06B6D4) else Color.Black.copy(alpha = 0.65f))
+                                .background(if (showGrid) Color(0xFF06B6D4) else Color.White.copy(alpha = 0.9f))
                                 .clickable { showGrid = !showGrid }
                                 .padding(horizontal = 10.dp, vertical = 5.dp)
                         ) {
@@ -1362,7 +1362,7 @@ fun CameraRecordingScreen(
                         // Resolution Switcher Pill
                         Row(
                             modifier = Modifier
-                                .background(Color.Black.copy(alpha = 0.65f), RoundedCornerShape(20.dp))
+                                .background(Color.White.copy(alpha = 0.9f), RoundedCornerShape(20.dp))
                                 .padding(3.dp),
                             horizontalArrangement = Arrangement.spacedBy(3.dp)
                         ) {
@@ -1452,7 +1452,7 @@ fun CameraRecordingScreen(
                             },
                             modifier = Modifier
                                 .size(50.dp)
-                                .background(if (isTorchOn) Color(0xFFF59E0B) else Color.Black.copy(alpha = 0.6f), CircleShape)
+                                .background(if (isTorchOn) Color(0xFFF59E0B) else Color.White.copy(alpha = 0.92f), CircleShape)
                         ) {
                             Icon(
                                 if (isTorchOn) Icons.Rounded.FlashOn else Icons.Rounded.FlashOff,
@@ -1479,7 +1479,7 @@ fun CameraRecordingScreen(
                                 .border(4.dp, Color.White, CircleShape)
                                 .padding(6.dp)
                                 .clip(CircleShape)
-                                .background(Color.Black.copy(alpha = 0.4f))
+                                .background(Color.White.copy(alpha = 0.85f))
                                 .clickable {
                                     if (isRecording) {
                                         stopStreaming()
@@ -1520,7 +1520,7 @@ fun CameraRecordingScreen(
                             enabled = !isRecording,
                             modifier = Modifier
                                 .size(50.dp)
-                                .background(Color.Black.copy(alpha = 0.6f), CircleShape)
+                                .background(Color.White.copy(alpha = 0.92f), CircleShape)
                         ) {
                             Icon(Icons.Rounded.FlipCameraAndroid, contentDescription = "Flip Lens", tint = Color.White)
                         }

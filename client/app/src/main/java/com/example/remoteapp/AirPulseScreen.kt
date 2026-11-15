@@ -32,7 +32,6 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -43,7 +42,12 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import okhttp3.*
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
@@ -52,12 +56,14 @@ import okio.BufferedSink
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.InputStream
+import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.URLEncoder
 import java.util.*
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
 
 private const val TAG = "AirPulse"
 
@@ -72,8 +78,7 @@ data class AirPulseDiscoveredPeer(
     val ip: String,
     val port: Int,
     val os: String,
-    val receiveMode: Boolean,
-    val pin: String = ""
+    val receiveMode: Boolean
 )
 
 data class AirPulseTransferState(
@@ -86,7 +91,8 @@ data class AirPulseTransferState(
     val speedStr: String,
     val percent: Int,
     val status: String,
-    val message: String
+    val message: String,
+    val id: String = ""
 )
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -103,13 +109,13 @@ fun AirPulseScreen(
     var activeMode by remember { mutableStateOf("send") }
 
     // Receive Mode State
-    var receivePin by remember {
-        mutableStateOf(String.format(Locale.US, "%06d", (100000..999999).random()))
-    }
     var qrBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
     var incomingRequestJson by remember { mutableStateOf<JSONObject?>(null) }
     var incomingRequestCallback by remember { mutableStateOf<((Boolean) -> Unit)?>(null) }
-    var isCopiedPin by remember { mutableStateOf(false) }
+    var incomingTransferToken by remember { mutableStateOf("") }
+    var outgoingTransferToken by remember { mutableStateOf("") }
+    var outgoingTargetIp by remember { mutableStateOf("") }
+    var outgoingTargetPort by remember { mutableIntStateOf(5055) }
 
     // Sender Mode State
     var selectedFiles by remember { mutableStateOf<List<AirPulseSelectedFile>>(emptyList()) }
@@ -117,10 +123,12 @@ fun AirPulseScreen(
     var isScanningPeers by remember { mutableStateOf(false) }
     var activeTransfer by remember { mutableStateOf<AirPulseTransferState?>(null) }
     var activeCall by remember { mutableStateOf<Call?>(null) }
+    val activeCalls = remember { mutableStateListOf<Call>() }
+    var receiverBeaconJob by remember { mutableStateOf<Job?>(null) }
 
     // Manual PIN Dialog
     var showPinDialog by remember { mutableStateOf(false) }
-    var manualPinInput by remember { mutableStateOf("") }
+    var showAirPulseQrScanner by remember { mutableStateOf(false) }
     var manualIpInput by remember { mutableStateOf("") }
     var targetPeerForPin by remember { mutableStateOf<AirPulseDiscoveredPeer?>(null) }
 
@@ -151,18 +159,11 @@ fun AirPulseScreen(
     }
 
     // Helper: Generate ZXing QR Bitmap
-    fun generateQrCode(pin: String) {
+    fun generateQrCode() {
         scope.launch(Dispatchers.IO) {
             try {
                 val ip = getLocalIp()
-                val payload = JSONObject().apply {
-                    put("airpulse", true)
-                    put("dev", Build.MODEL)
-                    put("ip", ip)
-                    put("port", 5056)
-                    put("pin", pin)
-                    put("os", "android")
-                }.toString()
+                val payload = "REMOTEPC|${Build.MODEL.take(40)}|$ip|5056|"
 
                 val writer = QRCodeWriter()
                 val matrix = writer.encode(payload, BarcodeFormat.QR_CODE, 400, 400)
@@ -183,26 +184,47 @@ fun AirPulseScreen(
         }
     }
 
-    // Receive Mode Lifecycle: sync with VideoStreamServer
-    LaunchedEffect(activeMode, receivePin) {
+    // Receiver availability is advertised only while the user has this mode enabled.
+    LaunchedEffect(activeMode) {
+        receiverBeaconJob?.cancel()
+        receiverBeaconJob = null
+        val srv = VideoStreamServer.getInstance()
         if (activeMode == "receive") {
-            generateQrCode(receivePin)
-            VideoStreamServer.getInstance()?.let { srv ->
-                srv.airPulseReceiveMode = true
-                srv.airPulsePin = receivePin
-                srv.onAirPulseRequest = { req, cb ->
-                    scope.launch(Dispatchers.Main) {
-                        incomingRequestJson = req
-                        incomingRequestCallback = cb
-                    }
+            generateQrCode()
+            srv?.let { server ->
+                server.airPulseReceiveMode = true
+                server.onAirPulseRequest = { req, cb ->
+                    scope.launch(Dispatchers.Main) { incomingRequestJson = req; incomingRequestCallback = cb }
+                }
+            }
+            receiverBeaconJob = scope.launch(Dispatchers.IO) {
+                while (isActive && srv?.airPulseReceiveMode == true) {
+                    try {
+                        val packetText = "AIRPULSE_PEER|${Build.MODEL.take(64)}|5056|android|1"
+                        val bytes = packetText.toByteArray()
+                        DatagramSocket().use { socket ->
+                            socket.broadcast = true
+                            socket.send(DatagramPacket(bytes, bytes.size, InetAddress.getByName("255.255.255.255"), 9999))
+                        }
+                    } catch (_: Exception) { }
+                    delay(1800)
                 }
             }
         } else {
-            VideoStreamServer.getInstance()?.let { srv ->
-                srv.airPulseReceiveMode = false
-                srv.onAirPulseRequest = null
+            srv?.let { server ->
+                server.airPulseReceiveMode = false
+                server.onAirPulseRequest = null
             }
             incomingRequestJson = null
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            receiverBeaconJob?.cancel()
+            VideoStreamServer.getInstance()?.let { server ->
+                server.airPulseReceiveMode = false
+                server.onAirPulseRequest = null
+            }
         }
     }
 
@@ -268,15 +290,10 @@ fun AirPulseScreen(
                             val port = parts.getOrNull(2)?.toIntOrNull() ?: 5055
                             val os = parts.getOrNull(3) ?: "unknown"
                             val rec = parts.getOrNull(4) == "1"
-                            val pin = parts.getOrNull(5) ?: ""
-                            peers.add(AirPulseDiscoveredPeer(name, ip, port, os, rec, pin))
-                            seenIps.add(ip)
-                        } else if (text.startsWith("REMOTE_SERVER|")) {
-                            val parts = text.split("|")
-                            val name = parts.getOrNull(1) ?: "PC ($ip)"
-                            val port = parts.getOrNull(2)?.toIntOrNull() ?: 5055
-                            peers.add(AirPulseDiscoveredPeer(name, ip, port, "windows", false))
-                            seenIps.add(ip)
+                            if (rec) {
+                                peers.add(AirPulseDiscoveredPeer(name, ip, port, os, true))
+                                seenIps.add(ip)
+                            }
                         }
                     } catch (_: Exception) {
                         break
@@ -302,7 +319,7 @@ fun AirPulseScreen(
     }
 
     // Send Files Worker
-    fun sendFilesToTarget(target: AirPulseDiscoveredPeer, pinCode: String = "") {
+    fun sendFilesToTarget(target: AirPulseDiscoveredPeer) {
         if (selectedFiles.isEmpty()) {
             Toast.makeText(context, "Select at least one file to beam", Toast.LENGTH_SHORT).show()
             return
@@ -331,7 +348,6 @@ fun AirPulseScreen(
                     put("sender_name", Build.MODEL)
                     put("sender_os", "android")
                     put("sender_ip", getLocalIp())
-                    put("pin", if (pinCode.isNotEmpty()) pinCode else target.pin)
                     put("total_size", totalBytes)
                     put("total_count", count)
                     val arr = JSONArray()
@@ -355,6 +371,7 @@ fun AirPulseScreen(
 
                 var status = "pending"
                 var remoteTxId: String? = null
+                var transferToken: String? = null
                 var reqId: String? = null
 
                 call.execute().use { resp ->
@@ -362,13 +379,14 @@ fun AirPulseScreen(
                     val json = JSONObject(body)
                     status = json.optString("status", "error")
                     remoteTxId = if (json.has("transfer_id")) json.getString("transfer_id") else null
+                    transferToken = if (json.has("transfer_token")) json.getString("transfer_token") else null
                     reqId = if (json.has("request_id")) json.getString("request_id") else null
                 }
 
                 // If pending, poll check-request
                 if (status == "pending" && reqId != null) {
                     val pollStart = System.currentTimeMillis()
-                    while (System.currentTimeMillis() - pollStart < 40000L) {
+                    while (System.currentTimeMillis() - pollStart < 110000L) {
                         delay(1200)
                         if (activeTransfer?.status == "cancelled") return@launch
                         val chkUrl = "http://${target.ip}:${target.port}/airpulse/check-request?request_id=$reqId"
@@ -380,6 +398,7 @@ fun AirPulseScreen(
                                 if (st == "accepted") {
                                     status = "accepted"
                                     remoteTxId = if (cb.has("transfer_id")) cb.getString("transfer_id") else null
+                                    transferToken = if (cb.has("transfer_token")) cb.getString("transfer_token") else null
                                 } else if (st == "declined") {
                                     status = "declined"
                                 }
@@ -399,74 +418,70 @@ fun AirPulseScreen(
                     return@launch
                 }
 
-                // 2. Stream each file
-                var transferredTotal = 0L
-                for (idx in selectedFiles.indices) {
-                    if (activeTransfer?.status == "cancelled") break
-                    val item = selectedFiles[idx]
-
-                    withContext(Dispatchers.Main) {
-                        activeTransfer = activeTransfer?.copy(
-                            currentFile = item.name,
-                            fileIndex = idx + 1,
-                            status = "in_progress",
-                            message = "Streaming file ${idx + 1} of $count..."
-                        )
-                    }
-
-                    val encodedName = URLEncoder.encode(item.name, "UTF-8")
-                    val uploadUrl = if (target.port == 5056) {
-                        "http://${target.ip}:${target.port}/airpulse/upload?filename=$encodedName&file_index=${idx + 1}&total_files=$count&file_size=${item.size}"
-                    } else {
-                        "http://${target.ip}:${target.port}/airpulse/upload?transfer_id=${remoteTxId ?: "tx"}&filename=$encodedName&file_index=${idx + 1}&total_files=$count&file_size=${item.size}"
-                    }
-
-                    var lastTime = System.currentTimeMillis()
-                    var lastBytes = 0L
-
-                    val bodyStream = object : RequestBody() {
-                        override fun contentType() = "application/octet-stream".toMediaTypeOrNull()
-                        override fun contentLength() = item.size
-                        override fun writeTo(sink: BufferedSink) {
-                            context.contentResolver.openInputStream(item.uri)?.use { input ->
-                                val buf = ByteArray(32 * 1024)
-                                var r: Int
-                                var fileTransferred = 0L
-                                while (input.read(buf).also { r = it } != -1) {
-                                    sink.write(buf, 0, r)
-                                    fileTransferred += r
-                                    transferredTotal += r
-                                    val now = System.currentTimeMillis()
-                                    val dt = now - lastTime
-                                    if (dt >= 200) {
-                                        val speedBytesPerSec = ((transferredTotal - lastBytes) * 1000L) / dt
-                                        val speedStr = if (speedBytesPerSec > 1024 * 1024) {
-                                            String.format(Locale.US, "%.1f MB/s", speedBytesPerSec / 1048576.0)
-                                        } else {
-                                            String.format(Locale.US, "%d KB/s", speedBytesPerSec / 1024)
+                withContext(Dispatchers.Main) {
+                    activeTransfer = activeTransfer?.copy(id = remoteTxId.orEmpty())
+                    outgoingTransferToken = transferToken.orEmpty()
+                    outgoingTargetIp = target.ip
+                    outgoingTargetPort = target.port
+                }
+                // Stream at most four selected files concurrently; each request uses a bounded buffer.
+                if (remoteTxId.isNullOrBlank() || transferToken.isNullOrBlank()) {
+                    throw IOException("Receiver did not issue transfer authorization")
+                }
+                val transferredTotal = AtomicLong(0L)
+                var speedSampleBytes = 0L
+                var speedSampleAt = System.currentTimeMillis()
+                val progressLock = Any()
+                coroutineScope {
+                    selectedFiles.mapIndexed { idx, item ->
+                        async(Dispatchers.IO) {
+                            if (activeTransfer?.status == "cancelled") return@async
+                            withContext(Dispatchers.Main) {
+                                activeTransfer = activeTransfer?.copy(currentFile = item.name, fileIndex = idx + 1,
+                                    status = "in_progress", message = "Sending ${idx + 1} of $count files…")
+                            }
+                            val encodedName = URLEncoder.encode(item.name, "UTF-8")
+                            val encodedId = URLEncoder.encode(remoteTxId!!, "UTF-8")
+                            val encodedToken = URLEncoder.encode(transferToken!!, "UTF-8")
+                            val uploadUrl = "http://${target.ip}:${target.port}/airpulse/upload?transfer_id=$encodedId&token=$encodedToken&filename=$encodedName&file_index=${idx + 1}&total_files=$count&file_size=${item.size}"
+                            val bodyStream = object : RequestBody() {
+                                override fun contentType() = "application/octet-stream".toMediaTypeOrNull()
+                                override fun contentLength() = item.size
+                                override fun writeTo(sink: BufferedSink) {
+                                    context.contentResolver.openInputStream(item.uri)?.use { input ->
+                                        val buf = ByteArray(256 * 1024)
+                                        var n: Int
+                                        while (input.read(buf).also { n = it } != -1) {
+                                            if (activeTransfer?.status == "cancelled") throw IOException("Transfer cancelled")
+                                            sink.write(buf, 0, n)
+                                            val current = transferredTotal.addAndGet(n.toLong())
+                                            val now = System.currentTimeMillis()
+                                            synchronized(progressLock) {
+                                                val dt = now - speedSampleAt
+                                                if (dt >= 250L) {
+                                                    val speed = ((current - speedSampleBytes) * 1000L) / dt
+                                                    speedSampleAt = now; speedSampleBytes = current
+                                                    val speedText = if (speed >= 1024L * 1024L) String.format(Locale.US, "%.1f MB/s", speed / 1048576.0) else String.format(Locale.US, "%d KB/s", speed / 1024)
+                                                    val pct = if (totalBytes > 0) ((current * 100) / totalBytes).toInt().coerceIn(0, 99) else 0
+                                                    scope.launch(Dispatchers.Main) { activeTransfer = activeTransfer?.copy(transferredBytes = current, speedStr = speedText, percent = pct) }
+                                                }
+                                            }
                                         }
-                                        val pct = if (totalBytes > 0) ((transferredTotal * 100) / totalBytes).toInt().coerceIn(0, 100) else 0
-                                        lastTime = now
-                                        lastBytes = transferredTotal
-
-                                        scope.launch(Dispatchers.Main) {
-                                            activeTransfer = activeTransfer?.copy(
-                                                transferredBytes = transferredTotal,
-                                                speedStr = speedStr,
-                                                percent = pct
-                                            )
-                                        }
-                                    }
+                                    } ?: throw IOException("Cannot open ${item.name}")
                                 }
                             }
+                            val upReq = Request.Builder().url(uploadUrl).post(bodyStream).build()
+                            val upCall = okHttpClient.newCall(upReq)
+                            withContext(Dispatchers.Main) { activeCall = upCall; activeCalls.add(upCall) }
+                            try {
+                                upCall.execute().use { response ->
+                                    if (!response.isSuccessful) throw IOException("${item.name}: receiver returned HTTP ${response.code}")
+                                    val ack = JSONObject(response.body?.string() ?: "{}")
+                                    if (ack.optString("status") != "ok" || ack.optLong("bytes", -1) != item.size) throw IOException("${item.name}: receiver did not confirm the complete file")
+                                }
+                            } finally { withContext(Dispatchers.Main) { activeCalls.remove(upCall) } }
                         }
-                    }
-
-                    val upReq = Request.Builder().url(uploadUrl).post(bodyStream).build()
-                    val upCall = okHttpClient.newCall(upReq)
-                    withContext(Dispatchers.Main) { activeCall = upCall }
-
-                    upCall.execute().use { _ -> }
+                    }.awaitAll()
                 }
 
                 withContext(Dispatchers.Main) {
@@ -479,11 +494,38 @@ fun AirPulseScreen(
                 }
             } catch (e: Exception) {
                 withContext(Dispatchers.Main) {
-                    activeTransfer = activeTransfer?.copy(
-                        status = "error",
-                        message = "Failed: ${e.message}"
+                    if (activeTransfer?.status != "cancelled") activeTransfer = activeTransfer?.copy(
+                        status = "error", message = "Failed: ${e.message}"
                     )
                 }
+            }
+        }
+    }
+
+    LaunchedEffect(activeTransfer?.id, activeTransfer?.direction) {
+        val transfer = activeTransfer
+        if (transfer != null && transfer.id.isNotBlank() && transfer.direction.contains("This phone")) {
+            while (activeTransfer?.status == "in_progress") {
+                try {
+                    val req = Request.Builder().url("http://127.0.0.1:5056/airpulse/transfer-status?transfer_id=${URLEncoder.encode(transfer.id, "UTF-8")}").get().build()
+                    val body = withContext(Dispatchers.IO) { okHttpClient.newCall(req).execute().use { it.body?.string().orEmpty() } }
+                    val state = JSONObject(body)
+                    if (state.optString("status") == "not_found") break
+                    val speed = state.optDouble("speed_mb", 0.0)
+                    val speedText = if (speed >= 1.0) String.format(Locale.US, "%.1f MB/s", speed) else String.format(Locale.US, "%d KB/s", (speed * 1024).toInt())
+                    activeTransfer = activeTransfer?.copy(
+                        currentFile = state.optString("current_file", transfer.currentFile),
+                        fileIndex = state.optInt("file_index", 1),
+                        transferredBytes = state.optLong("transferred_bytes", 0L),
+                        totalBytes = state.optLong("total_bytes", transfer.totalBytes),
+                        percent = state.optInt("percent", 0),
+                        speedStr = speedText,
+                        status = state.optString("status", "in_progress"),
+                        message = state.optString("message", "Receiving files")
+                    )
+                    if (state.optString("status") == "completed") break
+                } catch (_: Exception) { }
+                delay(450)
             }
         }
     }
@@ -535,7 +577,7 @@ fun AirPulseScreen(
                 modifier = Modifier
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0xFF0B0F19))
+                    .background(AppTheme.BackgroundDark)
                     .border(1.dp, AppTheme.CardBorderSubtle, RoundedCornerShape(16.dp))
                     .padding(4.dp),
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
@@ -663,7 +705,7 @@ fun AirPulseScreen(
 
                                 Text("Radar Receiver Active", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = AppTheme.TextPrimary)
                                 Text(
-                                    "Nearby devices can detect you or connect via PIN",
+                                    "Nearby devices can see you while Receiver Mode is on. Review every request before files arrive.",
                                     fontSize = 12.sp,
                                     color = AppTheme.TextMuted,
                                     textAlign = TextAlign.Center
@@ -671,53 +713,11 @@ fun AirPulseScreen(
 
                                 Spacer(Modifier.height(16.dp))
 
-                                // 6-Digit PIN Display Card
-                                Card(
-                                    shape = RoundedCornerShape(16.dp),
-                                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0B0F19)),
-                                    border = BorderStroke(1.dp, Color(0xFF1E293B)),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Row(
-                                        modifier = Modifier.padding(14.dp),
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.SpaceBetween
-                                    ) {
-                                        Column {
-                                            Text("AIRPULSE PAIRING PIN", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = Color(0xFF94A3B8))
-                                            Text(
-                                                "${receivePin.take(3)} ${receivePin.drop(3)}",
-                                                fontFamily = FontFamily.Monospace,
-                                                fontSize = 24.sp,
-                                                fontWeight = FontWeight.Black,
-                                                color = Color(0xFF10B981)
-                                            )
-                                        }
-
-                                        Button(
-                                            onClick = {
-                                                clipboardManager.setText(AnnotatedString(receivePin))
-                                                isCopiedPin = true
-                                            },
-                                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E293B)),
-                                            shape = RoundedCornerShape(10.dp)
-                                        ) {
-                                            Icon(
-                                                if (isCopiedPin) Icons.Rounded.Check else Icons.Rounded.ContentCopy,
-                                                contentDescription = null,
-                                                tint = Color(0xFF10B981),
-                                                modifier = Modifier.size(16.dp)
-                                            )
-                                            Spacer(Modifier.width(4.dp))
-                                            Text(if (isCopiedPin) "Copied" else "Copy", fontSize = 11.sp, color = Color.White)
-                                        }
-                                    }
-                                }
-
-                                Spacer(Modifier.height(16.dp))
+                                Text("Scan this code from another Android device running AirPulse, or choose this phone from its receiver list.", fontSize = 11.sp, color = AppTheme.TextMuted, textAlign = TextAlign.Center)
+                                Spacer(Modifier.height(12.dp))
 
                                 // Dynamic QR Code Box
-                                Text("OR SCAN TO BEAM INSTANTLY", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = AppTheme.TextMuted, letterSpacing = 1.sp)
+                                Text("RECEIVER CONNECTION QR", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = AppTheme.TextMuted, letterSpacing = 1.sp)
                                 Spacer(Modifier.height(8.dp))
 
                                 Box(
@@ -862,12 +862,19 @@ fun AirPulseScreen(
                             )
                             Row {
                                 TextButton(onClick = {
+                                    showAirPulseQrScanner = true
+                                }) {
+                                    Icon(Icons.Rounded.QrCodeScanner, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color(0xFF06B6D4))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("Scan QR", fontSize = 11.sp, color = Color(0xFF06B6D4), fontWeight = FontWeight.Bold)
+                                }
+                                TextButton(onClick = {
                                     targetPeerForPin = null
                                     showPinDialog = true
                                 }) {
                                     Icon(Icons.Rounded.Lock, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color(0xFF06B6D4))
                                     Spacer(Modifier.width(4.dp))
-                                    Text("PIN", fontSize = 11.sp, color = Color(0xFF06B6D4), fontWeight = FontWeight.Bold)
+                                    Text("Enter IP", fontSize = 11.sp, color = Color(0xFF06B6D4), fontWeight = FontWeight.Bold)
                                 }
                                 IconButton(onClick = { scanPeers() }, modifier = Modifier.size(32.dp)) {
                                     Icon(Icons.Rounded.Refresh, contentDescription = "Scan", tint = Color(0xFF06B6D4), modifier = Modifier.size(18.dp))
@@ -906,7 +913,7 @@ fun AirPulseScreen(
                                     ) {
                                         Icon(Icons.Rounded.Lock, contentDescription = null, tint = Color(0xFF0B0F19), modifier = Modifier.size(15.dp))
                                         Spacer(Modifier.width(6.dp))
-                                        Text("Connect with 6-Digit PIN", color = Color(0xFF0B0F19), fontWeight = FontWeight.Bold, fontSize = 11.sp)
+                                        Text("Connect by IP address", color = Color(0xFF0B0F19), fontWeight = FontWeight.Bold, fontSize = 11.sp)
                                     }
                                 }
                             }
@@ -986,6 +993,11 @@ fun AirPulseScreen(
                 val fCount = req.optInt("total_count", 1)
                 val sBytes = req.optLong("total_size", 0L)
                 val sIp = req.optString("sender_ip", "")
+                val manifest = req.optJSONArray("files")
+                val fileSummary = (0 until minOf(manifest?.length() ?: 0, 6)).joinToString("\n") { index ->
+                    val file = manifest?.optJSONObject(index)
+                    "• ${file?.optString("name", "File") ?: "File"}  ·  ${formatFileSize(file?.optLong("size", 0L) ?: 0L)}"
+                }
 
                 AlertDialog(
                     onDismissRequest = {
@@ -1009,7 +1021,7 @@ fun AirPulseScreen(
                             )
                             Spacer(Modifier.height(8.dp))
                             Text(
-                                "Total Payload: ${formatFileSize(sBytes)}\nFrom: $sIp\nSaving to: Downloads/RemotePC",
+                                "Files:\n$fileSummary${if (fCount > 6) "\n… and ${fCount - 6} more" else ""}\n\nTotal: ${formatFileSize(sBytes)}\nFrom: $sIp\nSaving to: Downloads/RemotePC",
                                 color = AppTheme.TextMuted,
                                 fontSize = 11.sp,
                                 fontFamily = FontFamily.Monospace
@@ -1019,6 +1031,24 @@ fun AirPulseScreen(
                     confirmButton = {
                         Button(
                             onClick = {
+                                val acceptedReq = incomingRequestJson
+                                val id = acceptedReq?.optString("airpulse_transfer_id").orEmpty()
+                                incomingTransferToken = acceptedReq?.optString("airpulse_transfer_token").orEmpty()
+                                val files = acceptedReq?.optJSONArray("files")
+                                val firstName = files?.optJSONObject(0)?.optString("name") ?: "Incoming files"
+                                activeTransfer = AirPulseTransferState(
+                                    direction = "${acceptedReq?.optString("sender_name", "Nearby device")} → This phone",
+                                    currentFile = firstName,
+                                    fileIndex = 1,
+                                    totalFiles = acceptedReq?.optInt("total_count", files?.length() ?: 1) ?: 1,
+                                    transferredBytes = 0L,
+                                    totalBytes = acceptedReq?.optLong("total_size", 0L) ?: 0L,
+                                    speedStr = "Waiting for sender…",
+                                    percent = 0,
+                                    status = "in_progress",
+                                    message = "Receiving approved files",
+                                    id = id
+                                )
                                 incomingRequestCallback?.invoke(true)
                                 incomingRequestJson = null
                             },
@@ -1052,7 +1082,7 @@ fun AirPulseScreen(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Icon(Icons.Rounded.Lock, contentDescription = null, tint = Color(0xFF06B6D4), modifier = Modifier.size(22.dp))
                             Spacer(Modifier.width(8.dp))
-                            Text("Direct PIN Pairing", color = AppTheme.TextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                            Text("Connect by IP address", color = AppTheme.TextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
                         }
                     },
                     text = {
@@ -1061,43 +1091,36 @@ fun AirPulseScreen(
                                 OutlinedTextField(
                                     value = manualIpInput,
                                     onValueChange = { manualIpInput = it },
-                                    label = { Text("Receiver IP (e.g. 192.168.1.10)") },
+                                    label = { Text("Receiver IP (e.g. 192.168.1.10:5056)") },
                                     singleLine = true,
                                     modifier = Modifier.fillMaxWidth()
                                 )
                             }
-                            OutlinedTextField(
-                                value = manualPinInput,
-                                onValueChange = { manualPinInput = it.take(6) },
-                                label = { Text("6-Digit PIN") },
-                                singleLine = true,
-                                textStyle = androidx.compose.ui.text.TextStyle(
-                                    fontFamily = FontFamily.Monospace,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 18.sp
-                                ),
-                                modifier = Modifier.fillMaxWidth()
-                            )
                         }
                     },
                     confirmButton = {
                         Button(
                             onClick = {
+                                val entered = manualIpInput.trim()
+                                val splitAt = entered.lastIndexOf(':')
+                                val explicitPort = splitAt > 0 && entered.substring(splitAt + 1).toIntOrNull() != null
+                                val address = if (explicitPort) entered.substring(0, splitAt) else entered
+                                val port = if (explicitPort) entered.substring(splitAt + 1).toIntOrNull() ?: 5055 else 5055
                                 val target = targetPeerForPin ?: AirPulseDiscoveredPeer(
-                                    name = "Device ($manualIpInput)",
-                                    ip = manualIpInput.trim(),
-                                    port = 5055,
+                                    name = "Device ($entered)",
+                                    ip = address.removePrefix("[").removeSuffix("]"),
+                                    port = port.coerceIn(1, 65535),
                                     os = "unknown",
                                     receiveMode = true
                                 )
                                 showPinDialog = false
-                                sendFilesToTarget(target, manualPinInput.trim())
+                                sendFilesToTarget(target)
                             },
-                            enabled = manualPinInput.length >= 4 && (targetPeerForPin != null || manualIpInput.isNotEmpty()),
+                            enabled = targetPeerForPin != null || manualIpInput.isNotBlank(),
                             colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF06B6D4)),
                             shape = RoundedCornerShape(10.dp)
                         ) {
-                            Text("Beam Files", fontWeight = FontWeight.Bold, color = Color(0xFF0B0F19))
+                            Text("Send request", fontWeight = FontWeight.Bold, color = Color(0xFF0B0F19))
                         }
                     },
                     dismissButton = {
@@ -1117,7 +1140,7 @@ fun AirPulseScreen(
                         .fillMaxWidth()
                         .padding(top = 10.dp),
                     shape = RoundedCornerShape(18.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A)),
+                    colors = CardDefaults.cardColors(containerColor = AppTheme.CardDark),
                     border = BorderStroke(1.dp, Color(0xFF06B6D4).copy(alpha = 0.5f))
                 ) {
                     Column(modifier = Modifier.padding(14.dp)) {
@@ -1146,7 +1169,23 @@ fun AirPulseScreen(
                                 OutlinedButton(
                                     onClick = {
                                         activeCall?.cancel()
-                                        activeTransfer = activeTransfer?.copy(status = "cancelled", message = "Cancelled")
+                                        activeCalls.forEach { it.cancel() }
+                                        val current = activeTransfer
+                                        if (current?.id?.isNotBlank() == true) {
+                                            val inbound = current.direction.contains("This phone")
+                                            val host = if (inbound) "127.0.0.1" else outgoingTargetIp
+                                            val port = if (inbound) 5056 else outgoingTargetPort
+                                            val authToken = if (inbound) incomingTransferToken else outgoingTransferToken
+                                            scope.launch(Dispatchers.IO) {
+                                                try {
+                                                    if (host.isNotBlank() && authToken.isNotBlank()) {
+                                                        val cancelUrl = "http://$host:$port/airpulse/cancel-transfer?transfer_id=${URLEncoder.encode(current.id, "UTF-8")}&token=${URLEncoder.encode(authToken, "UTF-8")}"
+                                                        okHttpClient.newCall(Request.Builder().url(cancelUrl).post(ByteArray(0).toRequestBody(null)).build()).execute().close()
+                                                    }
+                                                } catch (_: Exception) { }
+                                            }
+                                        }
+                                        activeTransfer = current?.copy(status = "cancelled", message = "Cancelled by user")
                                     },
                                     shape = RoundedCornerShape(8.dp),
                                     contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
@@ -1169,7 +1208,7 @@ fun AirPulseScreen(
                                 .height(5.dp)
                                 .clip(RoundedCornerShape(3.dp)),
                             color = Color(0xFF06B6D4),
-                            trackColor = Color(0xFF1E293B)
+                            trackColor = AppTheme.CardBorder
                         )
 
                         Spacer(Modifier.height(4.dp))
@@ -1186,4 +1225,18 @@ fun AirPulseScreen(
             }
         }
     }
+
+    if (showAirPulseQrScanner) {
+        QrScannerDialog(
+            onDismiss = { showAirPulseQrScanner = false },
+            onQrScanned = { name, target, _ ->
+                showAirPulseQrScanner = false
+                val cleanTarget = target.removePrefix("http://").removePrefix("https://")
+                val address = cleanTarget.substringBeforeLast(":", cleanTarget)
+                val port = cleanTarget.substringAfterLast(":", "5056").toIntOrNull() ?: 5056
+                sendFilesToTarget(AirPulseDiscoveredPeer(name, address, port, "android", true))
+            }
+        )
+    }
+
 }

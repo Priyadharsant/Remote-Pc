@@ -3,7 +3,7 @@ import ctypes
 import subprocess
 import threading
 import time
-import pyautogui
+from controllers.desktop_input import pyautogui
 
 _IS_WINDOWS = sys.platform == "win32"
 

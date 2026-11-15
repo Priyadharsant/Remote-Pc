@@ -1,6 +1,6 @@
 {
   "name": "remote-pc-workspace",
-  "version": "3.7.0",
+  "version": "4.0.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -16,7 +16,7 @@
     "build:installer": "python build_exe.py --installer-only",
     "build:server": "python build_exe.py --server-only",
     "build:gui": "python build_exe.py --gui-only",
-    "build:apk": "powershell -Command \"$env:JAVA_HOME = 'C:\\Program Files\\Android\\Android Studio\\jbr'; Set-Location client; .\\gradlew.bat assembleDebug --build-cache; Copy-Item 'app\\build\\outputs\\apk\\debug\\app-debug.apk' '..\\Remote PC.apk' -Force\"",
+    "build:apk": "node -e \"const { execSync } = require('child_process'); const fs = require('fs'); const path = require('path'); process.env.JAVA_HOME = 'C:\\\\Program Files\\\\Android\\\\Android Studio\\\\jbr'; execSync('cmd.exe /c gradlew.bat assembleDebug --build-cache', { stdio: 'inherit', cwd: 'client' }); const src = path.join('client', 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk'); fs.copyFileSync(src, 'Remote PC.apk'); fs.copyFileSync(src, 'Remote.PC.apk'); console.log('✓ APK copied to Remote PC.apk and Remote.PC.apk');\"",
     "build:all": "npm run build:apk && npm run build:exe",
     "bump": "node scripts/bump-version.js",
     "version:patch": "node scripts/bump-version.js patch",

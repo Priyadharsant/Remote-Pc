@@ -60,6 +60,7 @@ function loadEnvToken() {
 const FILES = {
   rootPackage: path.join(ROOT_DIR, "package.json"),
   desktopPackage: path.join(ROOT_DIR, "desktop-gui", "package.json"),
+  desktopLock: path.join(ROOT_DIR, "desktop-gui", "package-lock.json"),
   desktopVersionTs: path.join(ROOT_DIR, "desktop-gui", "src", "version.ts"),
   androidGradle: path.join(ROOT_DIR, "client", "app", "build.gradle.kts"),
   innoSetup: path.join(ROOT_DIR, "installer.iss"),
@@ -282,6 +283,18 @@ async function main() {
     modifiedFiles.push("desktop-gui/package.json");
   }
 
+  if (fs.existsSync(FILES.desktopLock)) {
+    const lock = readJson(FILES.desktopLock);
+    if (lock) {
+      lock.version = nextVersion;
+      if (lock.packages && lock.packages[""]) {
+        lock.packages[""].version = nextVersion;
+      }
+      writeJson(FILES.desktopLock, lock);
+      modifiedFiles.push("desktop-gui/package-lock.json");
+    }
+  }
+
   // 3. desktop-gui/src/version.ts
   if (fs.existsSync(FILES.desktopVersionTs)) {
     updateFile(FILES.desktopVersionTs, (content) => {
@@ -406,13 +419,15 @@ async function main() {
       const gradlewBat = path.join(clientDir, "gradlew.bat");
       if (fs.existsSync(gradlewBat)) {
         const gradleArgs = buildMode === "clean" ? "clean assembleDebug --build-cache" : "assembleDebug --build-cache";
-        execSync(`"${gradlewBat}" ${gradleArgs}`, { stdio: "inherit", cwd: clientDir });
+        execSync(`call gradlew.bat ${gradleArgs}`, { stdio: "inherit", cwd: clientDir, shell: true });
         const builtApk = path.join(clientDir, "app", "build", "outputs", "apk", "debug", "app-debug.apk");
         const rootApk = path.join(ROOT_DIR, "Remote PC.apk");
+        const rootApkDot = path.join(ROOT_DIR, "Remote.PC.apk");
         if (fs.existsSync(builtApk)) {
           fs.copyFileSync(builtApk, rootApk);
+          fs.copyFileSync(builtApk, rootApkDot);
           const stats = fs.statSync(rootApk);
-          console.log(`✓ Android APK compiled: Remote PC.apk (${(stats.size / (1024 * 1024)).toFixed(1)} MB)`);
+          console.log(`✓ Android APK compiled: Remote PC.apk / Remote.PC.apk (${(stats.size / (1024 * 1024)).toFixed(1)} MB)`);
         }
       }
     } else if (buildMode === "skip") {

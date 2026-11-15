@@ -21,6 +21,22 @@ import org.json.JSONObject
 import java.io.*
 import java.net.*
 import java.util.Locale
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
+
+private data class AirPulseAuthorization(
+    @Volatile var token: String,
+    val files: List<Pair<String, Long>>,
+    val senderName: String,
+    val totalBytes: Long,
+    val received: MutableSet<Int> = ConcurrentHashMap.newKeySet(),
+    val inProgress: MutableSet<Int> = ConcurrentHashMap.newKeySet(),
+    val transferredBytes: AtomicLong = AtomicLong(0L),
+    @Volatile var currentFile: String = "Preparing transfer",
+    @Volatile var currentIndex: Int = 1,
+    @Volatile var status: String = "in_progress",
+    val startedAt: Long = System.currentTimeMillis()
+)
 
 class VideoStreamServer(
     private val port: Int = 5056,
@@ -35,8 +51,8 @@ class VideoStreamServer(
     private var isTorchOn = false
 
     @Volatile var airPulseReceiveMode: Boolean = false
-    @Volatile var airPulsePin: String = ""
     var onAirPulseRequest: ((JSONObject, (Boolean) -> Unit) -> Unit)? = null
+    private val airPulseAuthorizations = ConcurrentHashMap<String, AirPulseAuthorization>()
 
     companion object {
         private const val TAG = "VideoStreamServer"
@@ -370,71 +386,99 @@ class VideoStreamServer(
                 }
                 return
             } else if (uri.startsWith("/airpulse/status")) {
-                val json = "{\"status\":\"ok\",\"device_name\":\"${Build.MODEL}\",\"os\":\"android\",\"port\":$port,\"receive_mode\":$airPulseReceiveMode,\"pin\":\"$airPulsePin\"}"
+                val json = "{\"status\":\"ok\",\"device_name\":\"${Build.MODEL}\",\"os\":\"android\",\"port\":$port,\"receive_mode\":$airPulseReceiveMode}"
                 sendJsonResponse(out, json)
+                return
+            } else if (uri.startsWith("/airpulse/cancel-transfer")) {
+                val id = uri.substringAfter("transfer_id=", "").substringBefore("&")
+                val token = uri.substringAfter("token=", "").substringBefore("&").let { try { URLDecoder.decode(it, "UTF-8") } catch (_: Exception) { it } }
+                val auth = airPulseAuthorizations[id]
+                if (auth == null || token.isBlank() || auth.token != token) { sendJsonError(out, 403, "Transfer authorization is invalid"); return }
+                auth.status = "cancelled"
+                auth.token = ""
+                sendJsonResponse(out, "{\"status\":\"cancelled\"}")
+                return
+            } else if (uri.startsWith("/airpulse/transfer-status")) {
+                val id = uri.substringAfter("transfer_id=", "").substringBefore("&")
+                val auth = airPulseAuthorizations[id]
+                if (auth == null) { sendJsonResponse(out, "{\"status\":\"not_found\"}"); return }
+                val moved = auth.transferredBytes.get()
+                val pct = if (auth.totalBytes > 0) (moved * 100 / auth.totalBytes).toInt().coerceIn(0, 100) else 100
+                val elapsed = ((System.currentTimeMillis() - auth.startedAt).coerceAtLeast(1L)) / 1000.0
+                val speed = (moved / 1048576.0) / elapsed
+                val completed = auth.received.size >= auth.files.size
+                val state = auth.status
+                val safeName = JSONObject.quote(auth.currentFile)
+                val json = "{\"id\":\"$id\",\"status\":\"${if (state == "cancelled") "cancelled" else if (completed) "completed" else "in_progress"}\",\"transferred_bytes\":$moved,\"total_bytes\":${auth.totalBytes},\"percent\":${if (completed) 100 else pct},\"speed_mb\":${String.format(Locale.US, "%.2f", speed)},\"current_file\":$safeName,\"file_index\":${auth.currentIndex},\"total_files\":${auth.files.size},\"message\":\"${if (completed) "Files received" else "Receiving files"}\"}"
+                sendJsonResponse(out, json)
+                if (completed || state == "cancelled") airPulseAuthorizations.remove(id, auth)
                 return
             } else if (uri.startsWith("/airpulse/receive-mode")) {
                 val enabled = uri.contains("enabled=true") || uri.contains("enabled=1")
                 airPulseReceiveMode = enabled
-                if (enabled && airPulsePin.isEmpty()) {
-                    airPulsePin = String.format(Locale.US, "%06d", (100000..999999).random())
-                } else if (!enabled) {
-                    airPulsePin = ""
-                }
-                val json = "{\"status\":\"ok\",\"receive_mode\":$airPulseReceiveMode,\"pin\":\"$airPulsePin\"}"
+                if (!enabled) airPulseAuthorizations.clear()
+                val json = "{\"status\":\"ok\",\"receive_mode\":$airPulseReceiveMode}"
                 sendJsonResponse(out, json)
                 return
             } else if (uri.startsWith("/airpulse/request")) {
+                if (!airPulseReceiveMode) { sendJsonError(out, 403, "Receiver mode is disabled"); return }
                 val bodyStr = readStringBody(rawIn, contentLength)
                 val bodyJson = try { JSONObject(bodyStr) } catch (_: Exception) { JSONObject() }
-                val pin = bodyJson.optString("pin", "")
-
-                if (airPulseReceiveMode && pin.isNotEmpty() && pin == airPulsePin) {
-                    val txId = "tx_" + java.util.UUID.randomUUID().toString().take(8)
-                    sendJsonResponse(out, "{\"status\":\"accepted\",\"transfer_id\":\"$txId\"}")
-                    return
+                val filesJson = bodyJson.optJSONArray("files") ?: JSONArray()
+                if (filesJson.length() == 0 || filesJson.length() > 1000) { sendJsonError(out, 400, "Invalid file list"); return }
+                val files = mutableListOf<Pair<String, Long>>()
+                var sizeSum = 0L
+                for (i in 0 until filesJson.length()) {
+                    val file = filesJson.optJSONObject(i) ?: run { sendJsonError(out, 400, "Invalid file list"); return }
+                    val name = File(file.optString("name", "")).name.take(255)
+                    val size = file.optLong("size", -1L)
+                    if (name.isBlank() || size < 0L) { sendJsonError(out, 400, "Invalid file manifest"); return }
+                    files.add(name to size); sizeSum += size
                 }
-
+                if (sizeSum != bodyJson.optLong("total_size", -1L)) { sendJsonError(out, 400, "File manifest size mismatch"); return }
+                val txId = "tx_" + java.util.UUID.randomUUID().toString().replace("-", "").take(20)
+                val transferToken = java.util.UUID.randomUUID().toString() + java.util.UUID.randomUUID().toString()
+                bodyJson.put("airpulse_transfer_id", txId)
+                bodyJson.put("airpulse_transfer_token", transferToken)
                 val lock = Object()
                 var userAccepted = false
-                val callback: (Boolean) -> Unit = { accepted ->
-                    synchronized(lock) {
-                        userAccepted = accepted
-                        lock.notifyAll()
-                    }
+                var answered = false
+                val callback: (Boolean) -> Unit = { accepted -> synchronized(lock) { if (!answered) { answered = true; userAccepted = accepted; lock.notifyAll() } } }
+                val listener = onAirPulseRequest
+                if (listener != null) {
+                    listener.invoke(bodyJson, callback)
+                    synchronized(lock) { try { if (!answered) lock.wait(90000L) } catch (_: Exception) {} }
                 }
-
-                if (onAirPulseRequest != null) {
-                    onAirPulseRequest?.invoke(bodyJson, callback)
-                    synchronized(lock) {
-                        try {
-                            lock.wait(35000L)
-                        } catch (_: Exception) {}
-                    }
-                } else if (airPulseReceiveMode) {
-                    userAccepted = true
-                }
-
-                if (userAccepted) {
-                    val txId = "tx_" + java.util.UUID.randomUUID().toString().take(8)
-                    sendJsonResponse(out, "{\"status\":\"accepted\",\"transfer_id\":\"$txId\"}")
-                } else {
-                    sendJsonResponse(out, "{\"status\":\"declined\"}")
-                }
+                if (!airPulseReceiveMode || !userAccepted) { sendJsonResponse(out, "{\"status\":\"declined\"}"); return }
+                val totalBytes = files.sumOf { it.second }
+                airPulseAuthorizations[txId] = AirPulseAuthorization(transferToken, files, bodyJson.optString("sender_name", "Nearby device"), totalBytes)
+                sendJsonResponse(out, "{\"status\":\"accepted\",\"transfer_id\":\"$txId\",\"transfer_token\":\"$transferToken\"}")
                 return
             } else if (uri.startsWith("/airpulse/upload")) {
-                val filenameParam = uri.substringAfter("filename=", "file_${System.currentTimeMillis()}").substringBefore("&")
-                val decodedName = try { URLDecoder.decode(filenameParam, "UTF-8") } catch (_: Exception) { filenameParam }
-                val cleanName = File(decodedName).name
-                val success = saveUploadedFile(cleanName, contentLength, rawIn)
+                if (!airPulseReceiveMode) { sendJsonError(out, 403, "Receiver mode is disabled"); return }
+                fun query(name: String): String = uri.substringAfter("$name=", "").substringBefore("&").let { try { URLDecoder.decode(it, "UTF-8") } catch (_: Exception) { it } }
+                val transferId = query("transfer_id")
+                val token = query("token")
+                val auth = airPulseAuthorizations[transferId]
+                val index = query("file_index").toIntOrNull() ?: 0
+                val cleanName = File(query("filename")).name
+                val expectedSize = query("file_size").toLongOrNull() ?: -1L
+                if (auth == null || auth.token != token || auth.status != "in_progress" || index !in 1..auth.files.size) { sendJsonError(out, 403, "Transfer authorization is invalid"); return }
+                val approved = auth.files[index - 1]
+                if (cleanName != approved.first || expectedSize != approved.second || contentLength != expectedSize || !auth.inProgress.add(index)) {
+                    sendJsonError(out, 400, "File does not match approved manifest"); return
+                }
+                auth.currentFile = cleanName
+                auth.currentIndex = index
+                val success = saveUploadedFile(cleanName, contentLength, rawIn) { bytes -> auth.transferredBytes.addAndGet(bytes) }
                 if (success) {
-                    Handler(Looper.getMainLooper()).post {
-                        Toast.makeText(context, "📥 AirPulse: Received $cleanName\nSaved in Downloads/RemotePC", Toast.LENGTH_LONG).show()
-                    }
-                    sendJsonResponse(out, "{\"status\":\"ok\",\"filename\":\"$cleanName\"}")
+                    auth.inProgress.remove(index)
+                    auth.received.add(index)
+                    Handler(Looper.getMainLooper()).post { Toast.makeText(context, "Received $cleanName in Downloads/RemotePC", Toast.LENGTH_LONG).show() }
+                    sendJsonResponse(out, "{\"status\":\"ok\",\"filename\":\"$cleanName\",\"bytes\":$contentLength}")
                 } else {
-                    out.write("HTTP/1.1 500 Internal Server Error\r\n\r\nFailed to save file".toByteArray())
-                    out.flush()
+                    auth.inProgress.remove(index)
+                    sendJsonError(out, 500, "Failed to save file")
                 }
                 return
             } else if (!uri.startsWith("/video")) {
@@ -526,6 +570,13 @@ class VideoStreamServer(
         } finally {
             try { socket.close() } catch (_: Exception) {}
         }
+    }
+
+    private fun sendJsonError(out: OutputStream, status: Int, message: String) {
+        val body = JSONObject().put("status", "error").put("message", message).toString().toByteArray(Charsets.UTF_8)
+        val label = if (status == 403) "Forbidden" else if (status == 409) "Conflict" else if (status == 413) "Payload Too Large" else "Bad Request"
+        out.write("HTTP/1.1 $status $label\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: ${body.size}\r\nConnection: close\r\n\r\n".toByteArray())
+        out.write(body); out.flush()
     }
 
     private fun sendJsonResponse(out: OutputStream, jsonStr: String) {
@@ -799,7 +850,7 @@ class VideoStreamServer(
         return root.toString()
     }
 
-    private fun saveUploadedFile(name: String, length: Long, input: InputStream): Boolean {
+    private fun saveUploadedFile(name: String, length: Long, input: InputStream, onProgress: ((Long) -> Unit)? = null): Boolean {
         val ext = name.substringAfterLast(".", "")
         val mimeType = if (ext.isNotEmpty()) {
             MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext.lowercase(Locale.ROOT)) ?: "application/octet-stream"
@@ -819,7 +870,7 @@ class VideoStreamServer(
                 val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
                 if (uri != null) {
                     resolver.openOutputStream(uri)?.use { outStream ->
-                        copyBytes(input, outStream, length)
+                        copyBytes(input, outStream, length, onProgress)
                     }
                     values.clear()
                     values.put(MediaStore.MediaColumns.IS_PENDING, 0)
@@ -839,7 +890,7 @@ class VideoStreamServer(
             if (!targetDir.exists()) targetDir.mkdirs()
             val targetFile = File(targetDir, name)
             FileOutputStream(targetFile).use { outStream ->
-                copyBytes(input, outStream, length)
+                copyBytes(input, outStream, length, onProgress)
             }
             MediaScannerConnection.scanFile(context, arrayOf(targetFile.absolutePath), arrayOf(mimeType), null)
             Log.d(TAG, "Successfully saved $name to public downloads ${targetFile.absolutePath}")
@@ -854,7 +905,7 @@ class VideoStreamServer(
             val targetDir = File(extDir, "RemotePC").apply { mkdirs() }
             val targetFile = File(targetDir, name)
             FileOutputStream(targetFile).use { outStream ->
-                copyBytes(input, outStream, length)
+                copyBytes(input, outStream, length, onProgress)
             }
             MediaScannerConnection.scanFile(context, arrayOf(targetFile.absolutePath), arrayOf(mimeType), null)
             Log.d(TAG, "Saved $name to app-specific files ${targetFile.absolutePath}")
@@ -865,7 +916,7 @@ class VideoStreamServer(
         }
     }
 
-    private fun copyBytes(input: InputStream, output: OutputStream, length: Long) {
+    private fun copyBytes(input: InputStream, output: OutputStream, length: Long, onProgress: ((Long) -> Unit)? = null) {
         val buffer = ByteArray(8192)
         var remaining = if (length > 0) length else Long.MAX_VALUE
         while (remaining > 0) {
@@ -873,6 +924,7 @@ class VideoStreamServer(
             val r = input.read(buffer, 0, toRead)
             if (r == -1) break
             output.write(buffer, 0, r)
+            onProgress?.invoke(r.toLong())
             if (length > 0) remaining -= r
         }
         output.flush()

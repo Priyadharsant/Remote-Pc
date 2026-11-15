@@ -676,7 +676,7 @@ function launchCoreServer() {
                 detached: true,
                 stdio: 'ignore',
                 cwd: cwd,
-                env: { ...process.env, DISPLAY: process.env.DISPLAY || ':0' }
+                env: { ...process.env }
               });
               child.unref();
               return resolve({ success: true, path: sPath });
@@ -708,7 +708,7 @@ function launchCoreServer() {
                 detached: true,
                 stdio: 'ignore',
                 cwd: cwd,
-                env: { ...process.env, DISPLAY: process.env.DISPLAY || ':0' }
+                env: { ...process.env }
               });
               child.unref();
               return resolve({ success: true, path: pyPath });

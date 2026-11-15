@@ -112,10 +112,10 @@ fun FolderSyncScreen(
                         Icon(Icons.Rounded.Refresh, contentDescription = "Sync Now", tint = Color(0xFF38BDF8))
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = Color(0xFF0F172A))
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = AppTheme.CardDark)
             )
         },
-        containerColor = Color(0xFF0B101E)
+        containerColor = AppTheme.BackgroundDark
     ) { innerPadding ->
         Column(
             modifier = Modifier
@@ -126,7 +126,7 @@ fun FolderSyncScreen(
         ) {
             // Main Folder Selection & Status Card
             Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF131D31)),
+                colors = CardDefaults.cardColors(containerColor = AppTheme.CardDark),
                 shape = RoundedCornerShape(20.dp),
                 modifier = Modifier
                     .fillMaxWidth()
@@ -173,7 +173,7 @@ fun FolderSyncScreen(
                                 checkedThumbColor = Color.White,
                                 checkedTrackColor = Color(0xFF06B6D4),
                                 uncheckedThumbColor = Color(0xFF64748B),
-                                uncheckedTrackColor = Color(0xFF1E293B)
+                                uncheckedTrackColor = AppTheme.CardBorder
                             )
                         )
                     }
@@ -210,7 +210,7 @@ fun FolderSyncScreen(
                         }
                         Box(
                             modifier = Modifier
-                                .background(Color(0xFF1E293B), RoundedCornerShape(12.dp))
+                                .background(AppTheme.CardBorder, RoundedCornerShape(12.dp))
                                 .padding(horizontal = 8.dp, vertical = 4.dp)
                         ) {
                             Text("Free: ${syncState.pcFreeDiskGb} GB", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = Color(0xFF10B981))
@@ -221,7 +221,7 @@ fun FolderSyncScreen(
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .background(Color(0xFF0F172A), RoundedCornerShape(12.dp))
+                            .background(AppTheme.CardDark, RoundedCornerShape(12.dp))
                             .padding(10.dp)
                     ) {
                         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -250,7 +250,7 @@ fun FolderSyncScreen(
 
             // Sync Status & Statistics Bar
             Card(
-                colors = CardDefaults.cardColors(containerColor = Color(0xFF131D31)),
+                colors = CardDefaults.cardColors(containerColor = AppTheme.CardDark),
                 shape = RoundedCornerShape(16.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -296,7 +296,7 @@ fun FolderSyncScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
-                        .background(Color(0xFF131D31).copy(alpha = 0.5f), RoundedCornerShape(16.dp))
+                        .background(AppTheme.CardDark.copy(alpha = 0.5f), RoundedCornerShape(16.dp))
                         .padding(24.dp),
                     contentAlignment = Alignment.Center
                 ) {
@@ -318,7 +318,7 @@ fun FolderSyncScreen(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .background(Color(0xFF131D31), RoundedCornerShape(12.dp))
+                                .background(AppTheme.CardDark, RoundedCornerShape(12.dp))
                                 .padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(10.dp)
@@ -395,7 +395,7 @@ fun FolderSyncScreen(
                     Text("Cancel", color = Color(0xFF94A3B8))
                 }
             },
-            containerColor = Color(0xFF131D31)
+            containerColor = AppTheme.CardDark
         )
     }
 }

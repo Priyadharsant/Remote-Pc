@@ -73,7 +73,7 @@ fun QrScannerDialog(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black)
+                .background(AppTheme.BackgroundDark)
         ) {
             if (hasCameraPermission) {
                 CameraPreviewWithScanner(
@@ -246,7 +246,7 @@ private fun CameraPreviewWithScanner(
                     modifier = Modifier
                         .size(44.dp)
                         .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.5f))
+                        .background(Color.White.copy(alpha = 0.9f))
                 ) {
                     Icon(Icons.Rounded.Close, contentDescription = "Close", tint = Color.White)
                 }
@@ -266,7 +266,7 @@ private fun CameraPreviewWithScanner(
                     modifier = Modifier
                         .size(44.dp)
                         .clip(CircleShape)
-                        .background(Color.Black.copy(alpha = 0.5f))
+                        .background(Color.White.copy(alpha = 0.9f))
                 ) {
                     Icon(
                         if (isTorchOn) Icons.Rounded.FlashOn else Icons.Rounded.FlashOff,
@@ -318,7 +318,7 @@ private fun CameraPreviewWithScanner(
                     .fillMaxWidth()
                     .padding(bottom = 50.dp, start = 24.dp, end = 24.dp),
                 shape = RoundedCornerShape(16.dp),
-                colors = CardDefaults.cardColors(containerColor = Color.Black.copy(alpha = 0.75f)),
+                colors = CardDefaults.cardColors(containerColor = AppTheme.CardDarkElevated),
                 border = BorderStroke(1.dp, AppTheme.AccentCyan.copy(alpha = 0.3f))
             ) {
                 Row(

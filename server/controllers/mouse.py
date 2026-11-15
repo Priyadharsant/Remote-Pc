@@ -1,9 +1,9 @@
 import threading
-import pyautogui
+from controllers.desktop_input import pyautogui
 
 try:
     from pynput.mouse import Controller as PynputMouseController, Button
-except ImportError:
+except Exception:
     PynputMouseController = None
     Button = None
 
@@ -17,7 +17,10 @@ _SCROLL_STEP = 20
 _ZOOM_THRESHOLD = 0.12
 
 _mouse_lock = threading.Lock()
-_pynput_mouse = PynputMouseController() if PynputMouseController is not None else None
+try:
+    _pynput_mouse = PynputMouseController() if PynputMouseController is not None else None
+except Exception:
+    _pynput_mouse = None
 
 def _clamp(value: float, minimum: float, maximum: float) -> float:
     return max(minimum, min(value, maximum))

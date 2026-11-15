@@ -674,7 +674,7 @@ fun RemoteDesktopScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black)
+            .background(AppTheme.BackgroundDark)
             .onSizeChanged { canvasSize = it }
     ) {
         val bmp = currentBitmap
@@ -1112,7 +1112,7 @@ fun RemoteDesktopScreen(
                         modifier = Modifier
                             .size(34.dp)
                             .clip(CircleShape)
-                            .background(Color(0xFF1E293B))
+                            .background(AppTheme.CardBorder)
                             .clickable {
                                 triggerHaptic()
                                 selectedFps = when (selectedFps) {
@@ -1342,7 +1342,7 @@ fun RemoteDesktopScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(10.dp))
-                            .background(Color(0xFF1E293B))
+                            .background(AppTheme.CardBorder)
                             .padding(horizontal = 12.dp, vertical = 8.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
@@ -1580,7 +1580,7 @@ fun RemoteDesktopScreen(
         if (showKeyboardSheet) {
             ModalBottomSheet(
                 onDismissRequest = { showKeyboardSheet = false },
-                containerColor = Color(0xFF0F172A),
+                containerColor = AppTheme.CardDark,
                 dragHandle = { BottomSheetDefaults.DragHandle(color = Color(0xFF64748B)) }
             ) {
                 Column(
@@ -1919,7 +1919,7 @@ fun RemoteDesktopScreen(
         if (showWindowPickerSheet) {
             ModalBottomSheet(
                 onDismissRequest = { showWindowPickerSheet = false },
-                containerColor = Color(0xFF0F172A),
+                containerColor = AppTheme.CardDark,
                 dragHandle = { BottomSheetDefaults.DragHandle(color = Color(0xFF64748B)) }
             ) {
                 Column(
@@ -1983,7 +1983,7 @@ fun RemoteDesktopScreen(
                             },
                         shape = RoundedCornerShape(12.dp),
                         colors = CardDefaults.cardColors(
-                            containerColor = if (targetMode == "desktop") Color(0xFF1E293B) else Color(0xFF131C2E)
+                            containerColor = if (targetMode == "desktop") AppTheme.CardBorder else AppTheme.CardDarkHighlight
                         ),
                         border = androidx.compose.foundation.BorderStroke(
                             1.dp,
@@ -2078,7 +2078,7 @@ fun RemoteDesktopScreen(
                                     },
                                 shape = RoundedCornerShape(12.dp),
                                 colors = CardDefaults.cardColors(
-                                    containerColor = if (isCurrent) Color(0xFF1E293B) else Color(0xFF131C2E)
+                                    containerColor = if (isCurrent) AppTheme.CardBorder else AppTheme.CardDarkHighlight
                                 ),
                                 border = androidx.compose.foundation.BorderStroke(
                                     1.dp,
@@ -2182,7 +2182,7 @@ fun CharKeyPill(
         modifier = modifier
             .height(38.dp)
             .clip(RoundedCornerShape(6.dp))
-            .background(Color(0xFF1E293B))
+            .background(AppTheme.CardBorder)
             .border(1.dp, Color(0xFF334155), RoundedCornerShape(6.dp))
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center
@@ -2252,7 +2252,7 @@ fun PresetChip(
     Box(
         modifier = modifier
             .clip(RoundedCornerShape(10.dp))
-            .background(if (isSelected) Color(0xFF6366F1).copy(alpha = 0.25f) else Color(0xFF1E293B))
+            .background(if (isSelected) Color(0xFF6366F1).copy(alpha = 0.25f) else AppTheme.CardDarkHighlight)
             .border(1.dp, if (isSelected) Color(0xFF6366F1) else Color(0xFF334155), RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
             .padding(vertical = 8.dp),

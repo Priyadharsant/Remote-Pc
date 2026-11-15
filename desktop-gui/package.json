@@ -1,10 +1,10 @@
 {
   "name": "desktop-gui",
   "productName": "Remote PC GUI",
-  "version": "3.7.0",
+  "version": "4.0.0",
   "description": "Remote PC Control Suite & Wireless Server GUI",
   "author": "Priyan <priyan@remotepc.local>",
-  "homepage": "https://github.com/priyan/Remote-Pc",
+  "homepage": "https://github.com/Priyadharsant/Remote-Pc",
   "type": "module",
   "main": "electron/main.cjs",
   "scripts": {
@@ -58,7 +58,6 @@
     }
   },
   "dependencies": {
-    "@rolldown/binding-win32-x64-msvc": "^1.2.16",
     "@types/qrcode": "^1.5.6",
     "clsx": "^2.1.1",
     "lucide-react": "^1.55.0",
@@ -84,6 +83,7 @@
     "wait-on": "^9.5.1"
   },
   "optionalDependencies": {
-    "@rolldown/binding-linux-x64-gnu": "^1.2.16"
+    "@rolldown/binding-linux-x64-gnu": "^1.2.16",
+    "@rolldown/binding-win32-x64-msvc": "^1.2.16"
   }
 }

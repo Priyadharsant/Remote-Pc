@@ -6,7 +6,7 @@
  *
  * Uploads:
  *   - Remote_PC_Setup.exe (Windows Installer)
- *   - Remote PC.apk (Android APK)
+ *   - Remote.PC.apk (Android APK)
  *   - latest.yml (Electron auto-updater metadata)
  *   - checksums.txt (SHA256 integrity verification)
  */
@@ -181,15 +181,17 @@ async function main() {
   }
   const tag = `v${version}`;
 
-  console.log(`\n========================================================`);
-  console.log(` Uploading Remote PC Release ${tag} to GitHub`);
-  console.log(`========================================================`);
-
   const headers = {
     Authorization: `token ${token}`,
     Accept: "application/vnd.github.v3+json",
     "User-Agent": "Remote-PC-Uploader/3.0",
   };
+
+  await pruneOldReleases(headers, tag, 10);
+
+  console.log(`\n========================================================`);
+  console.log(` Uploading Remote PC Release ${tag} to GitHub`);
+  console.log(`========================================================`);
 
   // 1. Get or create release
   let release = null;
@@ -212,7 +214,7 @@ async function main() {
           tag_name: tag,
           target_commitish: "main",
           name: `Remote PC ${tag}`,
-          body: `### Remote PC ${tag}\n\n- 📡 **AirPulse Peer-to-Peer Drop**: Instant cross-device file transfer engine across Mobile, Windows, and Ubuntu with zero cloud dependencies\n- 🎯 **Sonar Radar Receive Mode**: Real-time animated discovery radar for instant nearby peer detection\n- 🔐 **Dual Handshake Pairing**: Secure 6-digit PIN verification and dynamic ZXing QR code pairing\n- 📊 **High-Speed Transfer Engine**: Multi-file batch queue with live speed telemetry, progress HUD, and transfer notifications\n- 🎨 **Modern File Manager Overhaul**: Handcrafted obsidian glass design across both Desktop and Android applications\n- ⚡ **Low-Latency Remote PC Suite**: Responsive trackpad, keyboard shortcuts, media remote, and system controls`,
+          body: `### Remote PC ${tag}\n\n- 🌐 **Official Product Landing Site**: Dedicated responsive web showcase and product download page\n- 🎨 **Brand Identity & Modernized UI**: Handcrafted dark obsidian theme, updated typography, refreshed branding and vector icons across Desktop & Android\n- 📡 **AirPulse P2P File Drop Overhaul**: Simplified direct IP connection and real-time animated discovery radar with zero cloud dependencies\n- 🖱️ **Desktop Input Controllers & Low Latency**: Refactored keyboard, media, volume, and remote desktop controllers for smooth responsive control\n- 📱 **Android Client Enhancements**: Streamlined settings, unified theme palette, updated QR scanner and video stream server\n- 🐧 **Linux / Ubuntu Improvements**: Enhanced installer and environment configuration scripts`,
           draft: false,
           prerelease: false,
         }),
@@ -231,7 +233,7 @@ async function main() {
   const isApkOnly = process.argv.includes("--apk-only");
 
   const exePath = path.join(ROOT_DIR, "Remote_PC_Setup.exe");
-  const apkPath = path.join(ROOT_DIR, "Remote PC.apk");
+  const apkPath = path.join(ROOT_DIR, "Remote.PC.apk");
   const debPath = path.join(ROOT_DIR, "Remote_PC_Ubuntu_amd64.deb");
   const tarPath = path.join(ROOT_DIR, "Remote_PC_Linux_x86_64.tar.gz");
 
@@ -242,9 +244,11 @@ async function main() {
   }
 
   if (!isExeOnly && !fs.existsSync(apkPath)) {
-    // Check if client build output exists
+    const spaceApk = path.join(ROOT_DIR, "Remote PC.apk");
     const clientApk = path.join(ROOT_DIR, "client", "app", "build", "outputs", "apk", "debug", "app-debug.apk");
-    if (fs.existsSync(clientApk)) {
+    if (fs.existsSync(spaceApk)) {
+      fs.copyFileSync(spaceApk, apkPath);
+    } else if (fs.existsSync(clientApk)) {
       fs.copyFileSync(clientApk, apkPath);
     } else if (isApkOnly) {
       throw new Error(`Android APK not found at ${apkPath}. Run 'npm run build:apk' first!`);
@@ -287,8 +291,8 @@ async function main() {
 
   if (fs.existsSync(apkPath)) {
     const apkStats = fs.statSync(apkPath);
-    console.log(`Found Android APK:       Remote PC.apk (${(apkStats.size / (1024 * 1024)).toFixed(1)} MB)`);
-    checksumLines.push(`${computeSha256(apkPath)}  Remote PC.apk`);
+    console.log(`Found Android APK:       Remote.PC.apk (${(apkStats.size / (1024 * 1024)).toFixed(1)} MB)`);
+    checksumLines.push(`${computeSha256(apkPath)}  Remote.PC.apk`);
   }
 
   if (hasDeb) {
@@ -316,7 +320,7 @@ async function main() {
     },
     hasApk && {
       localPath: apkPath,
-      name: "Remote PC.apk",
+      name: "Remote.PC.apk",
       contentType: "application/vnd.android.package-archive",
     },
     hasDeb && {
@@ -432,6 +436,43 @@ async function main() {
   console.log(`📱 APK Download:     https://github.com/${OWNER}/${REPO}/releases/download/${tag}/Remote.PC.apk`);
   console.log(`🖥️  EXE Download:     https://github.com/${OWNER}/${REPO}/releases/download/${tag}/Remote_PC_Setup.exe`);
   console.log(`========================================================\n`);
+}
+
+async function pruneOldReleases(headers, currentTag, keepCount = 10) {
+  try {
+    const response = await fetch(
+      `https://api.github.com/repos/${OWNER}/${REPO}/releases?per_page=100`,
+      { headers }
+    );
+    if (!response.ok) {
+      console.warn(`Could not list releases for retention cleanup: HTTP ${response.status}`);
+      return;
+    }
+
+    const releases = (await response.json())
+      .filter((release) => !release.draft && !release.prerelease)
+      .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    const expired = releases.slice(keepCount);
+    if (expired.length === 0) {
+      console.log(`✓ Release retention: keeping the latest ${releases.length} stable releases (max ${keepCount})`);
+      return;
+    }
+
+    console.log(`🧹 Release retention: removing ${expired.length} stable releases older than the latest ${keepCount}`);
+    for (const release of expired) {
+      const result = await fetch(
+        `https://api.github.com/repos/${OWNER}/${REPO}/releases/${release.id}`,
+        { method: "DELETE", headers }
+      );
+      if (!result.ok) {
+        console.warn(`⚠️ Failed to delete old release ${release.tag_name}: HTTP ${result.status}`);
+      } else {
+        console.log(`  ✓ Deleted release ${release.tag_name}`);
+      }
+    }
+  } catch (err) {
+    console.warn("⚠️ Release retention notice:", err.message);
+  }
 }
 
 main().catch((err) => {

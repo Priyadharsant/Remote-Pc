@@ -21,9 +21,10 @@ export const AirPulse: React.FC<AirPulseProps> = () => {
   // Receive Mode State
   const [receiveStatus, setReceiveStatus] = useState<AirPulseStatus | null>(null);
   const [qrDataUrl, setQrDataUrl] = useState<string>('');
-  const [copiedPin, setCopiedPin] = useState(false);
+  const [copiedAddress, setCopiedAddress] = useState(false);
   const [incomingReq, setIncomingReq] = useState<AirPulseIncomingRequest | null>(null);
   const [isAccepting, setIsAccepting] = useState(false);
+  const [receiveError, setReceiveError] = useState<string | null>(null);
 
   // Sender Mode State
   const [selectedFiles, setSelectedFiles] = useState<Array<{ name: string; size: number; path?: string; fileObj?: File }>>([]);
@@ -31,11 +32,9 @@ export const AirPulse: React.FC<AirPulseProps> = () => {
   const [isScanningPeers, setIsScanningPeers] = useState(false);
   const [activeTransfer, setActiveTransfer] = useState<AirPulseTransferProgress | null>(null);
 
-  // Manual PIN & IP Modal
+  // Manual IP connection dialog
   const [pinModalOpen, setPinModalOpen] = useState(false);
   const [targetIpInput, setTargetIpInput] = useState('');
-  const [pinInput, setPinInput] = useState('');
-  const [pinTargetPeer, setPinTargetPeer] = useState<AirPulsePeer | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const transferPollRef = useRef<any>(null);
@@ -45,7 +44,7 @@ export const AirPulse: React.FC<AirPulseProps> = () => {
     try {
       const data = await api.getAirPulseStatus();
       setReceiveStatus(data);
-      if (data.pin) {
+      if (data.ip) {
         generateQr(data);
       }
     } catch {
@@ -55,14 +54,7 @@ export const AirPulse: React.FC<AirPulseProps> = () => {
 
   const generateQr = async (st: AirPulseStatus) => {
     try {
-      const payload = JSON.stringify({
-        airpulse: true,
-        dev: st.device_name,
-        ip: st.ip,
-        port: st.port,
-        pin: st.pin,
-        os: st.os
-      });
+      const payload = `REMOTEPC|${st.device_name || 'Remote PC'}|${st.ip}|${st.port || 5055}|`;
       const url = await QRCode.toDataURL(payload, {
         margin: 1.5,
         width: 240,
@@ -84,15 +76,16 @@ export const AirPulse: React.FC<AirPulseProps> = () => {
   // When switching to receive mode, automatically activate receiver mode on server
   useEffect(() => {
     if (mode === 'receive') {
+      setReceiveError(null);
       api.toggleAirPulseReceiveMode(true).then((res) => {
         setReceiveStatus(res);
-        generateQr(res);
+        if (res.ip) generateQr(res);
+      }).catch(() => {
+        setReceiveError('Start the Remote PC server to enable receiving.');
       });
     } else {
-      // Deactivate receive mode when switching to send to save discovery resources
-      api.toggleAirPulseReceiveMode(false).then((res) => {
-        setReceiveStatus(res);
-      });
+      // Stop advertising when the user leaves Receiver mode.
+      api.toggleAirPulseReceiveMode(false).then(setReceiveStatus).catch(() => {});
     }
   }, [mode]);
 
@@ -138,14 +131,6 @@ export const AirPulse: React.FC<AirPulseProps> = () => {
       return () => clearInterval(interval);
     }
   }, [mode]);
-
-  // --- Copy PIN to Clipboard ---
-  const copyPin = () => {
-    if (!receiveStatus?.pin) return;
-    navigator.clipboard.writeText(receiveStatus.pin);
-    setCopiedPin(true);
-    setTimeout(() => setCopiedPin(false), 2000);
-  };
 
   // --- Open Destination Folder ---
   const openSaveDirectory = () => {
@@ -268,7 +253,7 @@ export const AirPulse: React.FC<AirPulseProps> = () => {
   };
 
   // --- Send Files to Target Peer ---
-  const initiateSendToPeer = async (peer: AirPulsePeer, pinCode: string = '') => {
+  const initiateSendToPeer = async (peer: AirPulsePeer) => {
     if (selectedFiles.length === 0) {
       alert('Please select one or more files to send.');
       return;
@@ -280,7 +265,6 @@ export const AirPulse: React.FC<AirPulseProps> = () => {
       const res = await api.sendAirPulseFiles({
         target_ip: peer.ip,
         target_port: peer.port || 5055,
-        pin: pinCode || peer.pin || '',
         file_paths: filePaths
       });
 
@@ -305,19 +289,27 @@ export const AirPulse: React.FC<AirPulseProps> = () => {
   };
 
   const handleManualPinSend = () => {
-    if (!pinTargetPeer && !targetIpInput) {
+    if (!targetIpInput) {
       alert('Please enter receiver IP or select a device');
       return;
     }
-    const targetPeer: AirPulsePeer = pinTargetPeer || {
-      name: `Device (${targetIpInput})`,
-      ip: targetIpInput,
-      port: 5055,
+    const entered = targetIpInput.trim();
+    const hasPort = /^\[[^\]]+\]:\d+$/.test(entered) || /^[^:]+:\d+$/.test(entered);
+    const address = hasPort && entered.startsWith('[') ? entered.slice(1, entered.lastIndexOf(']')) : hasPort ? entered.slice(0, entered.lastIndexOf(':')) : entered;
+    const port = hasPort ? Number(entered.slice(entered.lastIndexOf(':') + 1)) : 5055;
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      alert('Enter a valid receiver port between 1 and 65535.');
+      return;
+    }
+    const targetPeer: AirPulsePeer = {
+      name: `Device (${entered})`,
+      ip: address,
+      port,
       os: 'unknown',
       receive_mode: true
     };
     setPinModalOpen(false);
-    initiateSendToPeer(targetPeer, pinInput.trim());
+    initiateSendToPeer(targetPeer);
   };
 
   return (
@@ -337,7 +329,7 @@ export const AirPulse: React.FC<AirPulseProps> = () => {
               </span>
             </div>
             <p className="text-xs text-slate-400 font-medium mt-0.5">
-              Zero-setup, ultra-fast peer-to-peer file transfer between Android, Windows & Ubuntu
+              Send to an available receiver on your local Wi-Fi. The receiver approves every transfer.
             </p>
           </div>
         </div>
@@ -370,11 +362,11 @@ export const AirPulse: React.FC<AirPulseProps> = () => {
       </div>
 
       {/* ===================================================================== */}
-      {/* RECEIVER MODE: OPTION A (Animated Sonar Radar, PIN, QR Code)           */}
+      {/* RECEIVER MODE (Nearby discovery and QR)           */}
       {/* ===================================================================== */}
       {mode === 'receive' && (
         <div className="space-y-5 animate-fade-in">
-          {/* Main Sonar Radar & PIN Stage */}
+          {/* Receiver status and QR code */}
           <div className="relative overflow-hidden rounded-3xl bg-gradient-to-b from-slate-900/90 via-slate-950/90 to-slate-950 border border-emerald-500/30 p-8 shadow-2xl shadow-emerald-500/10">
             {/* Subtle background sonar rings */}
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none -z-0">
@@ -383,38 +375,38 @@ export const AirPulse: React.FC<AirPulseProps> = () => {
             </div>
 
             <div className="relative z-10 grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
-              {/* Left Column: Live Radar Visual & PIN */}
+              {/* Left Column: Receiver status */}
               <div className="lg:col-span-7 space-y-6 text-center lg:text-left">
                 <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-bold">
                   <span className="w-2 h-2 rounded-full bg-emerald-400 shadow-[0_0_8px_#10B981] animate-pulse"></span>
-                  Radar Listening for Incoming Transfers
+                  {receiveError ? 'Receiver unavailable' : receiveStatus?.receive_mode ? 'Listening for incoming transfers' : 'Enabling Receiver Mode…'}
                 </div>
 
                 <div>
                   <h3 className="text-2xl font-black text-slate-100 tracking-tight">
-                    Receiver Mode Active
+                    {receiveError ? 'Receiver Mode Unavailable' : receiveStatus?.receive_mode ? 'Receiver Mode Active' : 'Starting Receiver Mode…'}
                   </h3>
                   <p className="text-sm text-slate-400 mt-1 max-w-md">
-                    Nearby phones and computers can detect this PC automatically. Or enter the 6-digit PIN below for direct instant pairing.
+                    Nearby devices can detect this PC while Receiver mode is on. Review each request before files arrive.
                   </p>
                 </div>
 
-                {/* 6-Digit PIN Display Card */}
+                {/* IP address Display Card */}
                 <div className="p-5 rounded-2xl bg-slate-950/90 border border-slate-800/90 shadow-inner max-w-sm">
                   <span className="text-[11px] font-black text-slate-400 uppercase tracking-widest block mb-1">
-                    AirPulse Pairing PIN
+                    Scan to connect
                   </span>
                   <div className="flex items-center justify-between gap-3">
                     <span className="font-mono text-3xl font-black tracking-widest text-emerald-400 drop-shadow-[0_0_12px_rgba(16,185,129,0.3)]">
-                      {receiveStatus?.pin ? `${receiveStatus.pin.slice(0, 3)} ${receiveStatus.pin.slice(3)}` : '------'}
+                      {receiveStatus?.ip ? `${receiveStatus.ip}:${receiveStatus.port || 5055}` : 'Waiting for network…'}
                     </span>
                     <button
-                      onClick={copyPin}
+                      onClick={() => { navigator.clipboard.writeText(`${receiveStatus?.ip || ''}:${receiveStatus?.port || 5055}`); setCopiedAddress(true); setTimeout(() => setCopiedAddress(false), 2000); }}
                       className="p-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-emerald-400 transition active:scale-95 flex items-center gap-1.5 text-xs font-bold"
-                      title="Copy PIN"
+                      title="Copy receiver address"
                     >
-                      {copiedPin ? <Check size={16} className="text-emerald-400" /> : <Copy size={16} />}
-                      <span>{copiedPin ? 'Copied' : 'Copy'}</span>
+                      {copiedAddress ? <Check size={16} className="text-emerald-400" /> : <Copy size={16} />}
+                      <span>{copiedAddress ? 'Copied' : 'Copy'}</span>
                     </button>
                   </div>
                 </div>
@@ -554,11 +546,11 @@ export const AirPulse: React.FC<AirPulseProps> = () => {
 
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => { setPinTargetPeer(null); setPinModalOpen(true); }}
+                  onClick={() => setPinModalOpen(true)}
                   className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-cyan-300 text-xs font-bold flex items-center gap-1.5 transition active:scale-95"
                 >
-                  <Lock size={12} />
-                  <span>Enter 6-Digit PIN</span>
+                  <Zap size={12} />
+                  <span>Connect by IP address</span>
                 </button>
                 <button
                   onClick={scanPeers}
@@ -582,11 +574,11 @@ export const AirPulse: React.FC<AirPulseProps> = () => {
                   Ensure the target phone or computer is connected to the same Wi-Fi and has Remote PC open or in Receiver Mode.
                 </p>
                 <button
-                  onClick={() => { setPinTargetPeer(null); setPinModalOpen(true); }}
+                  onClick={() => setPinModalOpen(true)}
                   className="px-4 py-2 rounded-xl bg-cyan-500/15 hover:bg-cyan-500/25 border border-cyan-500/30 text-cyan-300 text-xs font-bold inline-flex items-center gap-1.5 transition active:scale-95 mt-2"
                 >
                   <Zap size={13} />
-                  <span>Connect with 6-Digit PIN</span>
+                  <span>Connect by IP address</span>
                 </button>
               </div>
             ) : (
@@ -627,12 +619,12 @@ export const AirPulse: React.FC<AirPulseProps> = () => {
 
                       <div className="mt-4 pt-3 border-t border-slate-800/70 flex items-center justify-between gap-2">
                         <button
-                          onClick={() => { setPinTargetPeer(peer); setPinModalOpen(true); }}
+                          onClick={() => initiateSendToPeer(peer)}
                           className="px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 text-xs font-bold transition flex items-center gap-1"
-                          title="Enter PIN for this device"
+                          title="Request files from this receiver"
                         >
-                          <Lock size={12} />
-                          <span>PIN</span>
+                          <Send size={12} />
+                          <span>Request</span>
                         </button>
                         <button
                           onClick={() => initiateSendToPeer(peer)}
@@ -708,7 +700,7 @@ export const AirPulse: React.FC<AirPulseProps> = () => {
       )}
 
       {/* ===================================================================== */}
-      {/* 6-DIGIT PIN INPUT MODAL (Sender direct pairing)                       */}
+      {/* MANUAL IP ENTRY (Sender direct connection)                       */}
       {/* ===================================================================== */}
       {pinModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in">
@@ -718,7 +710,7 @@ export const AirPulse: React.FC<AirPulseProps> = () => {
                 <div className="w-9 h-9 rounded-xl bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
                   <Lock size={16} />
                 </div>
-                <h4 className="text-sm font-black text-slate-100">Direct PIN Pairing</h4>
+                <h4 className="text-sm font-black text-slate-100">Connect by IP address</h4>
               </div>
               <button onClick={() => setPinModalOpen(false)} className="text-slate-400 hover:text-slate-200">
                 <X size={16} />
@@ -726,39 +718,25 @@ export const AirPulse: React.FC<AirPulseProps> = () => {
             </div>
 
             <p className="text-xs text-slate-400">
-              Enter the 6-digit PIN displayed on the receiver's AirPulse screen to beam directly.
+Enter the receiver’s local IP address. Receiver mode must be enabled, and the receiver still needs to accept your request.
             </p>
 
             <div className="space-y-3">
-              {!pinTargetPeer && (
-                <div>
+              <div>
                   <label className="text-[11px] font-bold text-slate-400 block mb-1">Target Device IP</label>
                   <input
                     type="text"
-                    placeholder="e.g. 192.168.1.15"
+                    placeholder="e.g. 192.168.1.15 or 192.168.1.15:5056"
                     value={targetIpInput}
                     onChange={(e) => setTargetIpInput(e.target.value)}
                     className="w-full px-3 py-2 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-200 focus:outline-none focus:border-cyan-500"
                   />
                 </div>
-              )}
-
-              <div>
-                <label className="text-[11px] font-bold text-slate-400 block mb-1">6-Digit PIN Code</label>
-                <input
-                  type="text"
-                  maxLength={6}
-                  placeholder="e.g. 482910"
-                  value={pinInput}
-                  onChange={(e) => setPinInput(e.target.value)}
-                  className="w-full px-3 py-2.5 bg-slate-950 border border-slate-800 rounded-xl text-center font-mono text-lg font-black tracking-widest text-cyan-300 focus:outline-none focus:border-cyan-500"
-                />
-              </div>
             </div>
 
             <button
               onClick={handleManualPinSend}
-              disabled={pinInput.length < 4}
+              disabled={!targetIpInput.trim()}
               className="w-full py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-teal-400 text-slate-950 font-black text-xs shadow-md shadow-cyan-500/20 transition active:scale-95 disabled:opacity-50"
             >
               Connect & Beam Files

@@ -1,4 +1,4 @@
-import pyautogui
+from controllers.desktop_input import pyautogui
 
 def play_pause():
     pyautogui.press('playpause')

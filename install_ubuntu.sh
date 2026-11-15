@@ -94,18 +94,9 @@ set -e
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$APP_DIR"
 
-# Display & Auth detection
-if [ -z "$DISPLAY" ]; then
-    export DISPLAY=":0"
-fi
-if [ -z "$XAUTHORITY" ]; then
-    MUTTER_AUTH=$(ls /run/user/$(id -u)/.mutter-Xwaylandauth* 2>/dev/null | head -n 1)
-    if [ -n "$MUTTER_AUTH" ]; then
-        export XAUTHORITY="$MUTTER_AUTH"
-    elif [ -f "$HOME/.Xauthority" ]; then
-        export XAUTHORITY="$HOME/.Xauthority"
-    fi
-fi
+# Preserve the signed-in graphical session environment. Guessing DISPLAY=:0
+# breaks XWayland authorization on Ubuntu/Wayland and can prevent the server
+# from loading desktop automation support.
 
 CMD="${1:-all}"
 

@@ -39,6 +39,7 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.*
@@ -67,6 +68,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -140,7 +142,6 @@ class MainActivity : FragmentActivity() {
     private val KEY_LAST_NAME = "last_name"
     private val KEY_LAST_PASSWORD = "last_password"
     private val KEY_DEVICE_SAVED = "device_saved"
-    private val KEY_DARK_MODE = "is_dark_mode"
     private val KEY_AUTO_CONNECT_ENABLED = "auto_connect_enabled"
     private val KEY_AUTO_CONNECT_TARGET = "auto_connect_target"
     private val KEY_AUTO_CONNECT_NAME = "auto_connect_name"
@@ -709,10 +710,6 @@ class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val initPrefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val isAutoTheme = initPrefs.getBoolean("auto_theme", true)
-        val isSystemDark = (resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK) == android.content.res.Configuration.UI_MODE_NIGHT_YES
-        ThemeState.isAutoTheme = isAutoTheme
-        ThemeState.isDark = if (isAutoTheme) isSystemDark else initPrefs.getBoolean(KEY_DARK_MODE, isSystemDark)
         startVideoServer()
 
         val saved = getSavedCredentials()
@@ -722,13 +719,6 @@ class MainActivity : FragmentActivity() {
         }
 
         setContent {
-            val systemDark = androidx.compose.foundation.isSystemInDarkTheme()
-            LaunchedEffect(systemDark, ThemeState.isAutoTheme) {
-                if (ThemeState.isAutoTheme) {
-                    ThemeState.isDark = systemDark
-                }
-            }
-
             val bgDark = AppTheme.BackgroundDark
             val cardDark = AppTheme.CardDarkElevated
             val accentCyan = AppTheme.AccentCyan
@@ -1011,7 +1001,11 @@ class MainActivity : FragmentActivity() {
                                                     .border(1.dp, AppTheme.AccentCyan.copy(alpha = 0.5f), CircleShape),
                                                 contentAlignment = Alignment.Center
                                             ) {
-                                                Icon(Icons.Rounded.Computer, contentDescription = null, tint = AppTheme.AccentCyan, modifier = Modifier.size(26.dp))
+                                                Image(
+                                                    painter = painterResource(id = R.drawable.logo),
+                                                    contentDescription = "Remote PC logo",
+                                                    modifier = Modifier.size(38.dp).clip(RoundedCornerShape(11.dp))
+                                                )
                                             }
                                             Spacer(Modifier.width(12.dp))
                                             Column {
@@ -1820,7 +1814,7 @@ fun SplashScreen(onFinish: () -> Unit) {
                         .clip(CircleShape)
                         .background(
                             Brush.linearGradient(
-                                listOf(Color(0xFF1E293B), Color(0xFF0F172A))
+                                listOf(AppTheme.CardDarkHighlight, AppTheme.CardDark)
                             )
                         )
                         .border(1.5.dp, AppTheme.CardBorderGlow, CircleShape),
@@ -2202,7 +2196,7 @@ fun LiquidScanner(isScanning: Boolean) {
                 .clip(CircleShape)
                 .background(
                     Brush.linearGradient(
-                        listOf(Color(0xFF1E293B), Color(0xFF0F172A))
+                        listOf(AppTheme.CardDarkHighlight, AppTheme.CardDark)
                     )
                 )
                 .border(1.5.dp, AppTheme.CardBorderGlow, CircleShape),
@@ -2686,7 +2680,7 @@ fun LiquidSliderCard(
                         modifier = Modifier
                             .size(32.dp)
                             .clip(CircleShape)
-                            .background(Color(0xFF1E293B))
+                            .background(AppTheme.CardBorder)
                     ) {
                         Icon(Icons.Rounded.Add, contentDescription = "Increase", tint = Color.White, modifier = Modifier.size(16.dp))
                     }
@@ -3483,7 +3477,7 @@ fun DeviceTransferProgressCard(
                     .height(6.dp)
                     .clip(RoundedCornerShape(3.dp)),
                 color = Color(0xFF06B6D4),
-                trackColor = Color(0xFF1E293B)
+                trackColor = AppTheme.CardBorder
             )
 
             Spacer(Modifier.height(6.dp))
@@ -4414,7 +4408,7 @@ fun PcFileManagerScreen(
                 previewImageItem = null
                 previewImageBitmap = null
             },
-            containerColor = Color(0xFF0F172A),
+            containerColor = AppTheme.CardDark,
             title = {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -4437,7 +4431,7 @@ fun PcFileManagerScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(300.dp)
-                        .background(Color(0xFF1E293B), RoundedCornerShape(12.dp)),
+                        .background(AppTheme.CardBorder, RoundedCornerShape(12.dp)),
                     contentAlignment = Alignment.Center
                 ) {
                     if (isImageLoading) {
@@ -4501,7 +4495,7 @@ fun PcFileManagerScreen(
                 previewTextItem = null
                 previewTextContent = ""
             },
-            containerColor = Color(0xFF0F172A),
+            containerColor = AppTheme.CardDark,
             title = {
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
@@ -4532,7 +4526,7 @@ fun PcFileManagerScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(340.dp)
-                        .background(Color(0xFF090D16), RoundedCornerShape(12.dp))
+                        .background(AppTheme.CardDarkHighlight, RoundedCornerShape(12.dp))
                         .padding(12.dp)
                 ) {
                     if (isTextLoading) {

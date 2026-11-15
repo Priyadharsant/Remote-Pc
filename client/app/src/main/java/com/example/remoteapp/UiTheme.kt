@@ -8,8 +8,6 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
@@ -18,46 +16,40 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 
-// Observable state for Theme (Dark vs Light with Auto-Detection)
-object ThemeState {
-    var isDark by mutableStateOf(false)
-    var isAutoTheme by mutableStateOf(true)
-}
-
-// Adaptive Theme Supporting Both Black (Dark) and White (Light) Neumorphic Aesthetics
+// Shared light appearance for the desktop and Android companion apps.
 object AppTheme {
     val isDark: Boolean
-        get() = ThemeState.isDark
+        get() = false
 
     val BackgroundDark: Color
-        get() = if (isDark) Color(0xFF070B14) else Color(0xFFF8FAFC)
+        get() = Color(0xFFF5F7FB)
 
     val BackgroundSurface: Color
-        get() = if (isDark) Color(0xFF0D1424) else Color(0xFFF1F5F9)
+        get() = Color(0xFFEEF2F7)
 
     val CardDark: Color
-        get() = if (isDark) Color(0xFF111B2E) else Color(0xFFFFFFFF)
+        get() = Color(0xFFFFFFFF)
 
     val CardDarkElevated: Color
-        get() = if (isDark) Color(0xFF162238) else Color(0xFFFFFFFF)
+        get() = Color(0xFFFFFFFF)
 
     val CardDarkHighlight: Color
-        get() = if (isDark) Color(0xFF1E2E4A) else Color(0xFFF8FAFC)
+        get() = Color(0xFFF8FAFC)
 
     val CardBorder: Color
-        get() = if (isDark) Color(0x3D38BDF8) else Color(0x1F000000)
+        get() = Color(0xFFE3E8F0)
 
     val CardBorderSubtle: Color
-        get() = if (isDark) Color(0x24FFFFFF) else Color(0x14000000)
+        get() = Color(0xFFE7EBF2)
 
     val CardBorderGlow: Color
-        get() = if (isDark) Color(0x6600F0FF) else Color(0x4D4F46E5)
+        get() = Color(0x4D4F46E5)
 
     val AccentCyan: Color
-        get() = if (isDark) Color(0xFF00F0FF) else Color(0xFF0284C7)
+        get() = Color(0xFF2563EB)
 
     val AccentSky: Color
-        get() = if (isDark) Color(0xFF38BDF8) else Color(0xFF2563EB)
+        get() = Color(0xFF3269DF)
 
     val AccentPurple: Color
         get() = if (isDark) Color(0xFFA855F7) else Color(0xFF7C3AED)
@@ -72,13 +64,13 @@ object AppTheme {
         get() = Color(0xFFF43F5E)
 
     val TextPrimary: Color
-        get() = if (isDark) Color(0xFFF8FAFC) else Color(0xFF0F172A)
+        get() = Color(0xFF192439)
 
     val TextSecondary: Color
-        get() = if (isDark) Color(0xFFCBD5E1) else Color(0xFF334155)
+        get() = Color(0xFF536176)
 
     val TextMuted: Color
-        get() = if (isDark) Color(0xFF94A3B8) else Color(0xFF64748B)
+        get() = Color(0xFF78869A)
 
     val KeyBackground: Color
         get() = if (isDark) Color(0xFF162238) else Color(0xFFE2E8F0)
@@ -90,25 +82,13 @@ object AppTheme {
         get() = if (isDark) Color(0x3838BDF8) else Color(0x2E0F172A)
 
     val CardGradient: Brush
-        get() = if (isDark) {
-            Brush.verticalGradient(listOf(Color(0xFF121D30), Color(0xFF0B1322)))
-        } else {
-            Brush.verticalGradient(listOf(Color(0xFFFFFFFF), Color(0xFFF8FAFC)))
-        }
+        get() = Brush.verticalGradient(listOf(Color(0xFFFFFFFF), Color(0xFFF8FAFC)))
 
     val HeroCardGradient: Brush
-        get() = if (isDark) {
-            Brush.linearGradient(listOf(Color(0xFF16233B), Color(0xFF0B1220)))
-        } else {
-            Brush.linearGradient(listOf(Color(0xFFFFFFFF), Color(0xFFF1F5F9)))
-        }
+        get() = Brush.linearGradient(listOf(Color(0xFFFFFFFF), Color(0xFFF1F5F9)))
 
     val CyanGradient: Brush
-        get() = if (isDark) {
-            Brush.horizontalGradient(listOf(Color(0xFF0284C7), Color(0xFF00F0FF)))
-        } else {
-            Brush.horizontalGradient(listOf(Color(0xFF6366F1), Color(0xFF4F46E5)))
-        }
+        get() = Brush.horizontalGradient(listOf(Color(0xFF4B7DE2), Color(0xFF3269DF)))
 
     val AmberGradient: Brush
         get() = Brush.horizontalGradient(listOf(Color(0xFFF59E0B), Color(0xFFD97706)))
@@ -119,14 +99,14 @@ object AppTheme {
     val colorScheme
         get() = if (isDark) {
             darkColorScheme(
-                background = Color(0xFF070B14),
-                surface = Color(0xFF111B2E),
-                surfaceVariant = Color(0xFF162238),
-                primary = Color(0xFF00F0FF),
+                background = Color(0xFFF5F7FB),
+                surface = Color(0xFFFFFFFF),
+                surfaceVariant = Color(0xFFEEF2F7),
+                primary = Color(0xFF2563EB),
                 secondary = AccentAmber,
                 tertiary = AccentPurple,
-                onBackground = Color(0xFFF8FAFC),
-                onSurface = Color(0xFFF8FAFC)
+                onBackground = Color(0xFF192439),
+                onSurface = Color(0xFF192439)
             )
         } else {
             lightColorScheme(

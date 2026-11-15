@@ -20,7 +20,11 @@ import type { ServerStatus, SystemStats, PairingRequest } from './types';
 import { Download, RefreshCw, CheckCircle, AlertCircle } from 'lucide-react';
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<TabKey>('server');
+  const [activeTab, setActiveTab] = useState<TabKey>(() => {
+    const requested = new URLSearchParams(window.location.search).get('preview') as TabKey | null;
+    const tabs: TabKey[] = ['server', 'airpulse', 'mobile-info', 'camera-record', 'folder-sync', 'controls', 'files', 'security', 'settings'];
+    return requested && tabs.includes(requested) ? requested : 'server';
+  });
   const [isOnline, setIsOnline] = useState<boolean>(false);
   const [status, setStatus] = useState<ServerStatus | null>(null);
   const [stats, setStats] = useState<SystemStats | null>(null);

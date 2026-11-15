@@ -168,7 +168,6 @@ export interface AirPulsePeer {
   port: number;
   os: 'windows' | 'android' | 'linux' | 'unknown' | string;
   receive_mode: boolean;
-  pin?: string;
 }
 
 export interface AirPulseStatus {
@@ -178,7 +177,6 @@ export interface AirPulseStatus {
   ip: string;
   port: number;
   receive_mode: boolean;
-  pin: string;
   save_dir: string;
 }
 

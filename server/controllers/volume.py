@@ -4,10 +4,7 @@ import subprocess
 import re
 import threading
 
-try:
-    import pyautogui
-except Exception:
-    pyautogui = None
+from controllers.desktop_input import pyautogui
 
 _cached_endpoint = None
 _endpoint_lock = threading.Lock()
