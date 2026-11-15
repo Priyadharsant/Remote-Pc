@@ -32,6 +32,7 @@
     "release:patch": "node scripts/bump-version.js patch --release",
     "release:minor": "node scripts/bump-version.js minor --release",
     "release:major": "node scripts/bump-version.js major --release",
+    "deploy:website": "node scripts/deploy-website.js",
     "upload": "node scripts/upload-release.js"
   }
 }
