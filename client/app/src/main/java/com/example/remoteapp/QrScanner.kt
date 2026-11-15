@@ -357,9 +357,9 @@ private fun parseAndDispatchQr(
     onQrScanned: (pcName: String, pcTarget: String, pin: String) -> Unit
 ) {
     try {
-        if (rawText.startsWith("REMOTEPC|")) {
+        if (rawText.startsWith("REMOTEPC_AIRPULSE_SENDER|") || rawText.startsWith("REMOTEPC|")) {
             val parts = rawText.split("|")
-            val pcName = parts.getOrNull(1)?.trim() ?: "PC"
+            val pcName = parts.getOrNull(1)?.trim() ?: "Device"
             val ip = parts.getOrNull(2)?.trim() ?: ""
             val port = parts.getOrNull(3)?.trim() ?: "5055"
             val pin = parts.getOrNull(4)?.trim() ?: ""

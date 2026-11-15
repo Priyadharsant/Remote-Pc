@@ -71,8 +71,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   ];
 
   return (
-    <aside className="w-60 bg-[#070B14]/90 backdrop-blur-xl border-r border-cyan-500/15 flex flex-col justify-between p-3 select-none overflow-y-auto">
-      <div className="space-y-4">
+    <aside className="w-60 h-full max-h-full bg-[#070B14]/90 backdrop-blur-xl border-r border-cyan-500/15 flex flex-col p-3 select-none overflow-hidden shrink-0">
+      <div className="flex-1 overflow-y-auto space-y-4 pr-1 min-h-0 custom-scrollbar">
         {sections.map((sec, idx) => (
           <div key={idx} className="space-y-1">
             <div className="px-3 py-1.5 text-[9px] font-bold uppercase tracking-wider text-slate-500 flex items-center justify-between">
@@ -115,7 +115,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Bottom Info badge */}
-      <div className="p-3 rounded-2xl bg-gradient-to-br from-slate-900/80 to-[#0B1120] border border-cyan-500/10 text-[11px] text-slate-400 mt-3 shadow-inner">
+      <div className="p-3 rounded-2xl bg-gradient-to-br from-slate-900/80 to-[#0B1120] border border-cyan-500/10 text-[11px] text-slate-400 mt-2 shrink-0 shadow-inner">
         <div className="flex items-center justify-between">
           <div className="font-semibold text-slate-200 flex items-center gap-1.5">
             <img src="/brand-mark.svg" alt="" className="w-4 h-4 rounded" />

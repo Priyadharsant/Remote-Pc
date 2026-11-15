@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.provider.OpenableColumns
 import android.util.Log
@@ -60,6 +61,7 @@ import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
+import java.net.NetworkInterface
 import java.net.URLEncoder
 import java.util.*
 import java.util.concurrent.TimeUnit
@@ -105,8 +107,12 @@ fun AirPulseScreen(
     val scope = rememberCoroutineScope()
     val clipboardManager = LocalClipboardManager.current
 
-    // Mode: 'send' vs 'receive' (Option A - Dedicated Receive Radar)
+    // Mode: 'send' vs 'receive'
     var activeMode by remember { mutableStateOf("send") }
+
+    // Sender QR state
+    var showSenderQrDialog by remember { mutableStateOf(false) }
+    var senderQrBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
 
     // Receive Mode State
     var qrBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
@@ -158,6 +164,52 @@ fun AirPulseScreen(
         }
     }
 
+    // Helper: Collect broadcast addresses for all active network interfaces
+    fun getBroadcastAddresses(): List<InetAddress> {
+        val list = mutableListOf<InetAddress>()
+        try {
+            val interfaces = Collections.list(NetworkInterface.getNetworkInterfaces())
+            for (intf in interfaces) {
+                if (!intf.isUp || intf.isLoopback) continue
+                for (ia in intf.interfaceAddresses) {
+                    val bcast = ia.broadcast
+                    if (bcast != null && bcast is java.net.Inet4Address) {
+                        list.add(bcast)
+                    }
+                }
+            }
+        } catch (_: Exception) {}
+        try {
+            list.add(InetAddress.getByName("255.255.255.255"))
+        } catch (_: Exception) {}
+        return list.distinct()
+    }
+
+    // Helper: Generate Sender QR Bitmap
+    fun generateSenderQrCode() {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val ip = getLocalIp()
+                val payload = "REMOTEPC_AIRPULSE_SENDER|${Build.MODEL.take(40)}|$ip|5056|"
+                val writer = QRCodeWriter()
+                val matrix = writer.encode(payload, BarcodeFormat.QR_CODE, 400, 400)
+                val w = matrix.width
+                val h = matrix.height
+                val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.RGB_565)
+                for (x in 0 until w) {
+                    for (y in 0 until h) {
+                        bmp.setPixel(x, y, if (matrix.get(x, y)) android.graphics.Color.BLACK else android.graphics.Color.WHITE)
+                    }
+                }
+                withContext(Dispatchers.Main) {
+                    senderQrBitmap = bmp.asImageBitmap()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Sender QR generation failed", e)
+            }
+        }
+    }
+
     // Helper: Generate ZXing QR Bitmap
     fun generateQrCode() {
         scope.launch(Dispatchers.IO) {
@@ -198,17 +250,35 @@ fun AirPulseScreen(
                 }
             }
             receiverBeaconJob = scope.launch(Dispatchers.IO) {
+                var multicastLock: WifiManager.MulticastLock? = null
+                try {
+                    val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                    multicastLock = wm?.createMulticastLock("airpulse_rx_lock")?.apply {
+                        setReferenceCounted(true)
+                        acquire()
+                    }
+                } catch (_: Exception) {}
+
+                val bcasts = getBroadcastAddresses()
                 while (isActive && srv?.airPulseReceiveMode == true) {
                     try {
                         val packetText = "AIRPULSE_PEER|${Build.MODEL.take(64)}|5056|android|1"
                         val bytes = packetText.toByteArray()
                         DatagramSocket().use { socket ->
                             socket.broadcast = true
-                            socket.send(DatagramPacket(bytes, bytes.size, InetAddress.getByName("255.255.255.255"), 9999))
+                            for (targetAddr in bcasts) {
+                                try {
+                                    socket.send(DatagramPacket(bytes, bytes.size, targetAddr, 9999))
+                                } catch (_: Exception) {}
+                            }
                         }
                     } catch (_: Exception) { }
                     delay(1800)
                 }
+
+                try {
+                    if (multicastLock?.isHeld == true) multicastLock.release()
+                } catch (_: Exception) {}
             }
         } else {
             srv?.let { server ->
@@ -262,13 +332,27 @@ fun AirPulseScreen(
             seenIps.add(localIp)
             seenIps.add("127.0.0.1")
 
+            var multicastLock: WifiManager.MulticastLock? = null
+            try {
+                val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                multicastLock = wm?.createMulticastLock("airpulse_scan_lock")?.apply {
+                    setReferenceCounted(true)
+                    acquire()
+                }
+            } catch (_: Exception) {}
+
             var sendSocket: DatagramSocket? = null
             var listenSocket: DatagramSocket? = null
             try {
                 sendSocket = DatagramSocket().apply { broadcast = true }
                 val msg = "AIRPULSE_DISCOVER".toByteArray()
-                val packet = DatagramPacket(msg, msg.size, InetAddress.getByName("255.255.255.255"), 9999)
-                sendSocket.send(packet)
+                val bcasts = getBroadcastAddresses()
+                for (bcast in bcasts) {
+                    try {
+                        val packet = DatagramPacket(msg, msg.size, bcast, 9999)
+                        sendSocket.send(packet)
+                    } catch (_: Exception) {}
+                }
 
                 listenSocket = DatagramSocket().apply {
                     broadcast = true
@@ -276,7 +360,7 @@ fun AirPulseScreen(
                 }
                 val buf = ByteArray(1024)
                 val t0 = System.currentTimeMillis()
-                while (System.currentTimeMillis() - t0 < 1500) {
+                while (System.currentTimeMillis() - t0 < 1800) {
                     try {
                         val rp = DatagramPacket(buf, buf.size)
                         listenSocket.receive(rp)
@@ -304,6 +388,9 @@ fun AirPulseScreen(
             } finally {
                 sendSocket?.close()
                 listenSocket?.close()
+                try {
+                    if (multicastLock?.isHeld == true) multicastLock.release()
+                } catch (_: Exception) {}
                 withContext(Dispatchers.Main) {
                     discoveredPeers = peers
                     isScanningPeers = false
@@ -553,11 +640,6 @@ fun AirPulseScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onMenuClick) {
-                        Icon(Icons.Rounded.Menu, contentDescription = "Menu", tint = AppTheme.TextPrimary)
-                    }
-                },
-                actions = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = AppTheme.TextPrimary)
                     }
@@ -746,6 +828,21 @@ fun AirPulseScreen(
                                     Spacer(Modifier.width(6.dp))
                                     Text("Saves in: Downloads/RemotePC", fontSize = 11.sp, color = AppTheme.TextMuted)
                                 }
+
+                                Spacer(Modifier.height(14.dp))
+
+                                Button(
+                                    onClick = {
+                                        showAirPulseQrScanner = true
+                                    },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Icon(Icons.Rounded.QrCodeScanner, contentDescription = null, tint = Color(0xFF0B0F19), modifier = Modifier.size(18.dp))
+                                    Spacer(Modifier.width(8.dp))
+                                    Text("Scan Sender QR to Connect", fontWeight = FontWeight.Bold, color = Color(0xFF0B0F19), fontSize = 13.sp)
+                                }
                             }
                         }
                     }
@@ -862,11 +959,12 @@ fun AirPulseScreen(
                             )
                             Row {
                                 TextButton(onClick = {
-                                    showAirPulseQrScanner = true
+                                    generateSenderQrCode()
+                                    showSenderQrDialog = true
                                 }) {
-                                    Icon(Icons.Rounded.QrCodeScanner, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color(0xFF06B6D4))
+                                    Icon(Icons.Rounded.QrCode, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color(0xFF06B6D4))
                                     Spacer(Modifier.width(4.dp))
-                                    Text("Scan QR", fontSize = 11.sp, color = Color(0xFF06B6D4), fontWeight = FontWeight.Bold)
+                                    Text("Show QR", fontSize = 11.sp, color = Color(0xFF06B6D4), fontWeight = FontWeight.Bold)
                                 }
                                 TextButton(onClick = {
                                     targetPeerForPin = null
@@ -1224,6 +1322,68 @@ fun AirPulseScreen(
                 }
             }
         }
+    }
+
+    if (showSenderQrDialog) {
+        AlertDialog(
+            onDismissRequest = { showSenderQrDialog = false },
+            containerColor = AppTheme.CardDarkElevated,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.QrCode, contentDescription = null, tint = Color(0xFF06B6D4), modifier = Modifier.size(24.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Sender AirPulse Beam", color = AppTheme.TextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                }
+            },
+            text = {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        "Scan this QR from the receiver phone or PC to connect immediately.",
+                        fontSize = 12.sp,
+                        color = AppTheme.TextMuted,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(Modifier.height(14.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(220.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color.White)
+                            .padding(10.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (senderQrBitmap != null) {
+                            Image(
+                                bitmap = senderQrBitmap!!,
+                                contentDescription = "Sender QR",
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            CircularProgressIndicator(color = Color(0xFF06B6D4))
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "${Build.MODEL} • ${getLocalIp()}:5056",
+                        fontSize = 11.sp,
+                        color = AppTheme.TextMuted,
+                        fontFamily = FontFamily.Monospace
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showSenderQrDialog = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF06B6D4)),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text("Close", color = Color(0xFF0B0F19), fontWeight = FontWeight.Bold)
+                }
+            }
+        )
     }
 
     if (showAirPulseQrScanner) {

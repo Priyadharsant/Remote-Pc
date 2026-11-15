@@ -3,7 +3,7 @@ import QRCode from 'qrcode';
 import {
   Radio, HardDriveDownload, Send, Smartphone, Laptop, Terminal, Copy, Check,
   RefreshCw, FolderOpen, X, Zap,
-  CheckCircle2, Plus, Trash2, Lock
+  CheckCircle2, Plus, Trash2, Lock, QrCode as QrCodeIcon
 } from 'lucide-react';
 import { api } from '../api';
 import type {
@@ -35,6 +35,8 @@ export const AirPulse: React.FC<AirPulseProps> = () => {
   // Manual IP connection dialog
   const [pinModalOpen, setPinModalOpen] = useState(false);
   const [targetIpInput, setTargetIpInput] = useState('');
+  const [senderQrModalOpen, setSenderQrModalOpen] = useState(false);
+  const [senderQrUrl, setSenderQrUrl] = useState<string>('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const transferPollRef = useRef<any>(null);
@@ -73,7 +75,27 @@ export const AirPulse: React.FC<AirPulseProps> = () => {
     loadReceiveStatus();
   }, []);
 
-  // When switching to receive mode, automatically activate receiver mode on server
+  const showSenderQr = async () => {
+    try {
+      const st = receiveStatus || await api.getAirPulseStatus();
+      const ip = st?.ip || '127.0.0.1';
+      const port = st?.port || 5055;
+      const name = st?.device_name || 'Remote PC';
+      const payload = `REMOTEPC_AIRPULSE_SENDER|${name}|${ip}|${port}|`;
+      const url = await QRCode.toDataURL(payload, {
+        margin: 1.5,
+        width: 260,
+        color: {
+          dark: '#020617',
+          light: '#FFFFFF'
+        }
+      });
+      setSenderQrUrl(url);
+      setSenderQrModalOpen(true);
+    } catch {
+      // ignore
+    }
+  };
   useEffect(() => {
     if (mode === 'receive') {
       setReceiveError(null);
@@ -394,7 +416,7 @@ export const AirPulse: React.FC<AirPulseProps> = () => {
                 {/* IP address Display Card */}
                 <div className="p-5 rounded-2xl bg-slate-950/90 border border-slate-800/90 shadow-inner max-w-sm">
                   <span className="text-[11px] font-black text-slate-400 uppercase tracking-widest block mb-1">
-                    Scan to connect
+                    Receiver IP Address
                   </span>
                   <div className="flex items-center justify-between gap-3">
                     <span className="font-mono text-3xl font-black tracking-widest text-emerald-400 drop-shadow-[0_0_12px_rgba(16,185,129,0.3)]">
@@ -546,6 +568,14 @@ export const AirPulse: React.FC<AirPulseProps> = () => {
 
               <div className="flex items-center gap-2">
                 <button
+                  onClick={showSenderQr}
+                  className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-cyan-300 text-xs font-bold flex items-center gap-1.5 transition active:scale-95"
+                  title="Show Sender QR Code for Receiver to scan"
+                >
+                  <QrCodeIcon size={13} />
+                  <span>Show QR</span>
+                </button>
+                <button
                   onClick={() => setPinModalOpen(true)}
                   className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-cyan-300 text-xs font-bold flex items-center gap-1.5 transition active:scale-95"
                 >
@@ -617,26 +647,18 @@ export const AirPulse: React.FC<AirPulseProps> = () => {
                         </div>
                       </div>
 
-                      <div className="mt-4 pt-3 border-t border-slate-800/70 flex items-center justify-between gap-2">
-                        <button
-                          onClick={() => initiateSendToPeer(peer)}
-                          className="px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-slate-200 text-xs font-bold transition flex items-center gap-1"
-                          title="Request files from this receiver"
-                        >
-                          <Send size={12} />
-                          <span>Request</span>
-                        </button>
+                      <div className="mt-4 pt-3 border-t border-slate-800/70 flex items-center justify-end gap-2">
                         <button
                           onClick={() => initiateSendToPeer(peer)}
                           disabled={selectedFiles.length === 0}
-                          className={`flex-1 py-1.5 px-3 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition active:scale-95 shadow-sm ${
+                          className={`w-full py-2 px-3 rounded-xl text-xs font-black flex items-center justify-center gap-1.5 transition active:scale-95 shadow-sm ${
                             selectedFiles.length > 0
                               ? 'bg-gradient-to-r from-cyan-500 to-teal-400 text-slate-950 shadow-cyan-500/20'
                               : 'bg-slate-800 text-slate-500 cursor-not-allowed'
                           }`}
                         >
                           <Send size={12} />
-                          <span>Beam ({selectedFiles.length})</span>
+                          <span>{selectedFiles.length > 0 ? `Beam ${selectedFiles.length} File${selectedFiles.length > 1 ? 's' : ''}` : 'Select Files First'}</span>
                         </button>
                       </div>
                     </div>
@@ -740,6 +762,52 @@ Enter the receiver’s local IP address. Receiver mode must be enabled, and the 
               className="w-full py-2.5 rounded-xl bg-gradient-to-r from-cyan-500 to-teal-400 text-slate-950 font-black text-xs shadow-md shadow-cyan-500/20 transition active:scale-95 disabled:opacity-50"
             >
               Connect & Beam Files
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ===================================================================== */}
+      {/* SENDER QR CODE MODAL (Sender shows QR, Receiver scans)                 */}
+      {/* ===================================================================== */}
+      {senderQrModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 animate-fade-in">
+          <div className="w-full max-w-sm bg-slate-900 border border-cyan-500/40 rounded-3xl p-6 shadow-2xl shadow-cyan-500/20 space-y-4 text-center">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center text-cyan-400">
+                  <QrCodeIcon size={16} />
+                </div>
+                <h4 className="text-sm font-black text-slate-100">Sender AirPulse QR</h4>
+              </div>
+              <button onClick={() => setSenderQrModalOpen(false)} className="text-slate-400 hover:text-slate-200">
+                <X size={16} />
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-400">
+              Open Receiver mode on your phone or device, tap <strong>Scan Sender QR</strong>, and point camera here.
+            </p>
+
+            <div className="p-3 bg-white rounded-2xl mx-auto w-fit shadow-lg shadow-cyan-500/10">
+              {senderQrUrl ? (
+                <img src={senderQrUrl} alt="Sender QR Code" className="w-56 h-56 object-contain" />
+              ) : (
+                <div className="w-56 h-56 flex items-center justify-center text-xs text-slate-500 font-bold">
+                  Generating QR...
+                </div>
+              )}
+            </div>
+
+            <div className="text-[11px] font-mono text-cyan-400 bg-slate-950/80 p-2 rounded-xl border border-slate-800">
+              {receiveStatus?.ip || '127.0.0.1'}:{receiveStatus?.port || 5055}
+            </div>
+
+            <button
+              onClick={() => setSenderQrModalOpen(false)}
+              className="w-full py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 font-bold text-xs transition active:scale-95"
+            >
+              Close
             </button>
           </div>
         </div>

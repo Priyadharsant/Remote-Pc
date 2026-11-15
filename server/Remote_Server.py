@@ -2372,16 +2372,37 @@ AIRPULSE_RESERVED_PATHS: set = set()
 AIRPULSE_TRANSFERS_DIR = os.path.join(os.path.expanduser("~"), "Downloads", "RemotePC_Transfers")
 os.makedirs(AIRPULSE_TRANSFERS_DIR, exist_ok=True)
 
+def get_broadcast_addresses() -> list:
+    broadcasts = set()
+    try:
+        import psutil, ipaddress
+        for iface, if_addrs in psutil.net_if_addrs().items():
+            for addr in if_addrs:
+                if addr.family == socket.AF_INET and not addr.address.startswith('127.'):
+                    if getattr(addr, 'broadcast', None):
+                        broadcasts.add(addr.broadcast)
+                    elif getattr(addr, 'netmask', None):
+                        try:
+                            net = ipaddress.IPv4Network(f"{addr.address}/{addr.netmask}", strict=False)
+                            broadcasts.add(str(net.broadcast_address))
+                        except Exception:
+                            pass
+    except Exception:
+        pass
+    broadcasts.add("255.255.255.255")
+    return list(broadcasts)
+
 def discover_airpulse_peers(timeout: float = 1.2) -> list:
     peers, seen_ips = [], {get_lan_ip(), "127.0.0.1"}
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             sock.settimeout(0.25)
-            try:
-                sock.sendto(b"AIRPULSE_DISCOVER", ("255.255.255.255", DISCOVERY_PORT))
-            except OSError:
-                return peers
+            for bcast in get_broadcast_addresses():
+                try:
+                    sock.sendto(b"AIRPULSE_DISCOVER", (bcast, DISCOVERY_PORT))
+                except OSError:
+                    pass
             deadline = time.time() + timeout
             while time.time() < deadline:
                 try:
