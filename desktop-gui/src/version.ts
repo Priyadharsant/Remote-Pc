@@ -3,8 +3,8 @@
  * Modeled after Finance Application's version.js architecture
  */
 
-export const APP_VERSION = "4.0.1";
-export const APP_BUILD_DATE = "2026-11-15";
+export const APP_VERSION = "4.0.2";
+export const APP_BUILD_DATE = "2026-11-17";
 export const APP_NAME = "Remote PC";
 export const GITHUB_REPO = "Priyadharsant/Remote-Pc";
 export const DEFAULT_RAW_GITHUB_DOWNLOAD_URL = `https://github.com/${GITHUB_REPO}/releases/download/v${APP_VERSION}/Remote_PC_Setup.exe`;
