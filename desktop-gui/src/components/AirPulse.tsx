@@ -56,7 +56,8 @@ export const AirPulse: React.FC<AirPulseProps> = () => {
 
   const generateQr = async (st: AirPulseStatus) => {
     try {
-      const payload = `REMOTEPC|${st.device_name || 'Remote PC'}|${st.ip}|${st.port || 5055}|`;
+      const ssid = st.wifi_ssid || '';
+      const payload = `REMOTEPC|${st.device_name || 'Remote PC'}|${st.ip}|${st.port || 5055}||${ssid}`;
       const url = await QRCode.toDataURL(payload, {
         margin: 1.5,
         width: 240,
@@ -81,7 +82,8 @@ export const AirPulse: React.FC<AirPulseProps> = () => {
       const ip = st?.ip || '127.0.0.1';
       const port = st?.port || 5055;
       const name = st?.device_name || 'Remote PC';
-      const payload = `REMOTEPC_AIRPULSE_SENDER|${name}|${ip}|${port}|`;
+      const ssid = st?.wifi_ssid || '';
+      const payload = `REMOTEPC_AIRPULSE_SENDER|${name}|${ip}|${port}|${ssid}|`;
       const url = await QRCode.toDataURL(payload, {
         margin: 1.5,
         width: 260,

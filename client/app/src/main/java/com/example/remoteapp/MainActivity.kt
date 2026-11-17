@@ -1726,6 +1726,47 @@ class MainActivity : FragmentActivity() {
                                             showPasswordDialog = true
                                         }
                                     }
+                                },
+                                onQrScannedDetailed = { pcName, pcTarget, pin, ssid, isAirPulseDirect ->
+                                    showQrScanner = false
+                                    val device = Pair(pcName, pcTarget)
+                                    val doConnect = {
+                                        if (isAirPulseDirect) {
+                                            currentScreen = "airpulse"
+                                        } else if (pin.isNotEmpty()) {
+                                            verifyAndConnect(device, pin, true)
+                                        } else {
+                                            val savedPass = SecureStorage.getPassword(this@MainActivity)
+                                            if (savedPass.isNotEmpty()) {
+                                                verifyAndConnect(device, savedPass, true)
+                                            } else {
+                                                deviceToConnect = device
+                                                passwordInput = ""
+                                                saveDeviceChecked = true
+                                                showPasswordDialog = true
+                                            }
+                                        }
+                                    }
+
+                                    if (ssid.isNotBlank()) {
+                                        val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                                        val curSsid = wm?.connectionInfo?.ssid?.replace("\"", "") ?: ""
+                                        if (curSsid.isNotBlank() && curSsid != "<unknown ssid>" && curSsid != ssid) {
+                                            Toast.makeText(this@MainActivity, "Connecting to Wi-Fi $ssid...", Toast.LENGTH_SHORT).show()
+                                            WifiNetworkHelper.connectToWifi(this@MainActivity, ssid) { connected, msg ->
+                                                runOnUiThread {
+                                                    if (connected) {
+                                                        Toast.makeText(this@MainActivity, "Connected to $ssid!", Toast.LENGTH_SHORT).show()
+                                                    } else {
+                                                        Toast.makeText(this@MainActivity, msg, Toast.LENGTH_LONG).show()
+                                                    }
+                                                    doConnect()
+                                                }
+                                            }
+                                            return@QrScannerDialog
+                                        }
+                                    }
+                                    doConnect()
                                 }
                             )
                         }

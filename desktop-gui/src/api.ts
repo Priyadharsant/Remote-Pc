@@ -480,7 +480,7 @@ export const api = {
     return res.json();
   },
 
-  async sendAirPulseFiles(payload: { target_ip: string; target_port?: number; pin?: string; file_paths: string[] }): Promise<{ status: string; transfer_id: string }> {
+  async sendAirPulseFiles(payload: { target_ip: string; target_port?: number; pin?: string; file_paths: string[]; direct?: boolean }): Promise<{ status: string; transfer_id: string }> {
     const res = await fetch(`${BASE_URL}/airpulse/send-files`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

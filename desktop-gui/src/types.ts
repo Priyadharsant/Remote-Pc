@@ -177,6 +177,7 @@ export interface AirPulseStatus {
   ip: string;
   port: number;
   receive_mode: boolean;
+  wifi_ssid?: string;
   save_dir: string;
 }
 

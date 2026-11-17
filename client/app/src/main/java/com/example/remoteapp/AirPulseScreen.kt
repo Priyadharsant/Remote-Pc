@@ -1,7 +1,11 @@
 package com.example.remoteapp
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.ContentResolver
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.net.Uri
 import android.net.wifi.WifiManager
@@ -9,6 +13,7 @@ import android.os.Build
 import android.provider.OpenableColumns
 import android.util.Log
 import android.widget.Toast
+import androidx.core.app.NotificationCompat
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.*
@@ -190,7 +195,10 @@ fun AirPulseScreen(
         scope.launch(Dispatchers.IO) {
             try {
                 val ip = getLocalIp()
-                val payload = "REMOTEPC_AIRPULSE_SENDER|${Build.MODEL.take(40)}|$ip|5056|"
+                val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                var ssid = wm?.connectionInfo?.ssid?.replace("\"", "") ?: ""
+                if (ssid == "<unknown ssid>") ssid = ""
+                val payload = "REMOTEPC_AIRPULSE_SENDER|${Build.MODEL.take(40)}|$ip|5056|$ssid|"
                 val writer = QRCodeWriter()
                 val matrix = writer.encode(payload, BarcodeFormat.QR_CODE, 400, 400)
                 val w = matrix.width
@@ -215,7 +223,10 @@ fun AirPulseScreen(
         scope.launch(Dispatchers.IO) {
             try {
                 val ip = getLocalIp()
-                val payload = "REMOTEPC|${Build.MODEL.take(40)}|$ip|5056|"
+                val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                var ssid = wm?.connectionInfo?.ssid?.replace("\"", "") ?: ""
+                if (ssid == "<unknown ssid>") ssid = ""
+                val payload = "REMOTEPC|${Build.MODEL.take(40)}|$ip|5056||$ssid"
 
                 val writer = QRCodeWriter()
                 val matrix = writer.encode(payload, BarcodeFormat.QR_CODE, 400, 400)
@@ -236,6 +247,56 @@ fun AirPulseScreen(
         }
     }
 
+    // Helper: Show Incoming AirPulse Transfer Notification
+    fun showIncomingNotification(senderName: String, fileCount: Int, totalBytes: Long) {
+        try {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            val channelId = "airpulse_transfers"
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val channel = NotificationChannel(
+                    channelId,
+                    "AirPulse Transfers",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    description = "Notifications for incoming AirPulse file transfers"
+                    enableVibration(true)
+                }
+                nm.createNotificationChannel(channel)
+            }
+
+            val launchIntent = Intent(context, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                context,
+                2001,
+                launchIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+            )
+
+            val notif = NotificationCompat.Builder(context, channelId)
+                .setSmallIcon(R.mipmap.ic_launcher)
+                .setContentTitle("Incoming AirPulse Beam")
+                .setContentText("$senderName wants to send $fileCount file(s) (${formatFileSize(totalBytes)})")
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setAutoCancel(true)
+                .setContentIntent(pendingIntent)
+                .build()
+
+            nm.notify(2001, notif)
+        } catch (e: Exception) {
+            Log.e(TAG, "Notification post failed", e)
+        }
+    }
+
+    // Helper: Dismiss Notification
+    fun dismissIncomingNotification() {
+        try {
+            val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
+            nm?.cancel(2001)
+        } catch (_: Exception) {}
+    }
+
     // Receiver availability is advertised only while the user has this mode enabled.
     LaunchedEffect(activeMode) {
         receiverBeaconJob?.cancel()
@@ -246,7 +307,14 @@ fun AirPulseScreen(
             srv?.let { server ->
                 server.airPulseReceiveMode = true
                 server.onAirPulseRequest = { req, cb ->
-                    scope.launch(Dispatchers.Main) { incomingRequestJson = req; incomingRequestCallback = cb }
+                    scope.launch(Dispatchers.Main) {
+                        incomingRequestJson = req
+                        incomingRequestCallback = cb
+                        val sName = req.optString("sender_name", "Nearby Device")
+                        val fCount = req.optInt("total_count", 1)
+                        val sBytes = req.optLong("total_size", 0L)
+                        showIncomingNotification(sName, fCount, sBytes)
+                    }
                 }
             }
             receiverBeaconJob = scope.launch(Dispatchers.IO) {
@@ -406,7 +474,7 @@ fun AirPulseScreen(
     }
 
     // Send Files Worker
-    fun sendFilesToTarget(target: AirPulseDiscoveredPeer) {
+    fun sendFilesToTarget(target: AirPulseDiscoveredPeer, directMode: Boolean = false) {
         if (selectedFiles.isEmpty()) {
             Toast.makeText(context, "Select at least one file to beam", Toast.LENGTH_SHORT).show()
             return
@@ -425,7 +493,7 @@ fun AirPulseScreen(
             speedStr = "Connecting...",
             percent = 0,
             status = "requesting",
-            message = "Waiting for ${target.name}..."
+            message = if (directMode) "Connecting directly via QR…" else "Waiting for ${target.name}..."
         )
 
         scope.launch(Dispatchers.IO) {
@@ -437,6 +505,7 @@ fun AirPulseScreen(
                     put("sender_ip", getLocalIp())
                     put("total_size", totalBytes)
                     put("total_count", count)
+                    put("direct", directMode)
                     val arr = JSONArray()
                     for (f in selectedFiles) {
                         arr.put(JSONObject().apply {
@@ -1099,6 +1168,7 @@ fun AirPulseScreen(
 
                 AlertDialog(
                     onDismissRequest = {
+                        dismissIncomingNotification()
                         incomingRequestCallback?.invoke(false)
                         incomingRequestJson = null
                     },
@@ -1129,6 +1199,7 @@ fun AirPulseScreen(
                     confirmButton = {
                         Button(
                             onClick = {
+                                dismissIncomingNotification()
                                 val acceptedReq = incomingRequestJson
                                 val id = acceptedReq?.optString("airpulse_transfer_id").orEmpty()
                                 incomingTransferToken = acceptedReq?.optString("airpulse_transfer_token").orEmpty()
@@ -1159,6 +1230,7 @@ fun AirPulseScreen(
                     dismissButton = {
                         TextButton(
                             onClick = {
+                                dismissIncomingNotification()
                                 incomingRequestCallback?.invoke(false)
                                 incomingRequestJson = null
                             }
@@ -1394,7 +1466,35 @@ fun AirPulseScreen(
                 val cleanTarget = target.removePrefix("http://").removePrefix("https://")
                 val address = cleanTarget.substringBeforeLast(":", cleanTarget)
                 val port = cleanTarget.substringAfterLast(":", "5056").toIntOrNull() ?: 5056
-                sendFilesToTarget(AirPulseDiscoveredPeer(name, address, port, "android", true))
+                sendFilesToTarget(AirPulseDiscoveredPeer(name, address, port, "android", true), directMode = true)
+            },
+            onQrScannedDetailed = { name, target, _, ssid, isDirect ->
+                showAirPulseQrScanner = false
+                val cleanTarget = target.removePrefix("http://").removePrefix("https://")
+                val address = cleanTarget.substringBeforeLast(":", cleanTarget)
+                val port = cleanTarget.substringAfterLast(":", "5056").toIntOrNull() ?: 5056
+
+                val peer = AirPulseDiscoveredPeer(name, address, port, "android", true)
+                if (ssid.isNotBlank()) {
+                    val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                    val currentSsid = wm?.connectionInfo?.ssid?.replace("\"", "") ?: ""
+                    if (currentSsid.isNotBlank() && currentSsid != "<unknown ssid>" && currentSsid != ssid) {
+                        Toast.makeText(context, "Connecting to $ssid...", Toast.LENGTH_SHORT).show()
+                        WifiNetworkHelper.connectToWifi(context, ssid) { connected, msg ->
+                            scope.launch(Dispatchers.Main) {
+                                if (connected) {
+                                    Toast.makeText(context, "Connected to $ssid! Beaming files...", Toast.LENGTH_SHORT).show()
+                                    sendFilesToTarget(peer, directMode = true)
+                                } else {
+                                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                                    sendFilesToTarget(peer, directMode = true)
+                                }
+                            }
+                        }
+                        return@QrScannerDialog
+                    }
+                }
+                sendFilesToTarget(peer, directMode = true)
             }
         )
     }

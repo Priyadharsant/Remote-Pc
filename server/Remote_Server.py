@@ -1752,6 +1752,26 @@ def get_lan_ip() -> str:
     except OSError:
         return '127.0.0.1'
 
+def get_connected_wifi_ssid() -> str:
+    """Detect the current Wi-Fi SSID on Windows / Linux if connected."""
+    try:
+        if sys.platform == "win32":
+            out = subprocess.check_output(['netsh', 'wlan', 'show', 'interfaces'], text=True, errors='ignore')
+            for line in out.splitlines():
+                if 'SSID' in line and 'BSSID' not in line:
+                    parts = line.split(':', 1)
+                    if len(parts) > 1:
+                        val = parts[1].strip()
+                        if val and val != "None":
+                            return val
+        elif sys.platform.startswith("linux"):
+            out = subprocess.check_output(['iwgetid', '-r'], text=True, errors='ignore').strip()
+            if out:
+                return out
+    except Exception:
+        pass
+    return ""
+
 def read_current_volume():
     try:
         return volume.get_volume()
@@ -1772,10 +1792,11 @@ def get_status() -> dict:
     
     # Generate QR Code base64
     qr_b64 = ""
+    ssid = get_connected_wifi_ssid()
     try:
         import qrcode
         import io
-        qr_data = f"REMOTEPC|{SERVER_NAME}|{lan_ip}|{PORT}|{pin}"
+        qr_data = f"REMOTEPC|{SERVER_NAME}|{lan_ip}|{PORT}|{pin}|{ssid}"
         qr = qrcode.QRCode(version=1, box_size=4, border=1)
         qr.add_data(qr_data)
         qr.make(fit=True)
@@ -1793,6 +1814,7 @@ def get_status() -> dict:
         'ip': lan_ip,
         'port': PORT,
         'pin': pin,
+        'wifi_ssid': ssid,
         'qr_code': qr_b64,
         'volume': read_current_volume(),
         'brightness': read_current_brightness(),
@@ -2430,6 +2452,7 @@ def discover_airpulse_peers(timeout: float = 1.2) -> list:
 def get_airpulse_status() -> dict:
     return {"status": "ok", "device_name": SERVER_NAME, "os": sys.platform,
             "ip": get_lan_ip(), "port": PORT, "receive_mode": AIRPULSE_RECEIVE_MODE,
+            "wifi_ssid": get_connected_wifi_ssid(),
             "save_dir": AIRPULSE_TRANSFERS_DIR}
 
 @app.post('/airpulse/receive-mode')
@@ -2447,7 +2470,9 @@ async def toggle_airpulse_receive_mode(request: Request) -> dict:
                     transfer.update(status="cancelled", message="Receiver mode was disabled", token="")
     log_server_event(f"AirPulse receiver mode {'enabled' if AIRPULSE_RECEIVE_MODE else 'disabled'}", "INFO")
     return {"status": "ok", "receive_mode": AIRPULSE_RECEIVE_MODE,
-            "device_name": SERVER_NAME, "ip": get_lan_ip(), "port": PORT, "save_dir": AIRPULSE_TRANSFERS_DIR}
+            "device_name": SERVER_NAME, "ip": get_lan_ip(), "port": PORT,
+            "wifi_ssid": get_connected_wifi_ssid(),
+            "save_dir": AIRPULSE_TRANSFERS_DIR}
 
 @app.get('/airpulse/peers')
 def get_airpulse_peers() -> dict:
@@ -2474,13 +2499,27 @@ async def handle_airpulse_request(request: Request) -> dict:
         if sum(f["size"] for f in clean_files) != total_size: raise ValueError()
     except (ValueError, TypeError):
         raise HTTPException(status_code=400, detail="Invalid file manifest")
+    is_direct = bool(payload.get("direct", False))
+    transfer_id, transfer_token = ("tx_" + uuid.uuid4().hex, secrets.token_urlsafe(32)) if is_direct else (None, None)
+    status_val = "accepted" if is_direct else "pending"
     req_id = secrets.token_urlsafe(24)
     req = {"id": req_id, "sender_name": str(payload.get("sender_name", "Nearby device"))[:80],
            "sender_ip": request.client.host if request.client else "", "sender_os": str(payload.get("sender_os", "unknown"))[:24],
            "files": clean_files, "total_size": total_size, "total_count": len(clean_files),
-           "timestamp": time.time(), "status": "pending", "transfer_id": None, "transfer_token": None}
-    with AIRPULSE_LOCK: AIRPULSE_PENDING_REQUESTS[req_id] = req
-    log_server_event(f"AirPulse request from {req['sender_name']}: {len(clean_files)} files", "INFO")
+           "timestamp": time.time(), "status": status_val, "transfer_id": transfer_id, "transfer_token": transfer_token}
+    with AIRPULSE_LOCK:
+        AIRPULSE_PENDING_REQUESTS[req_id] = req
+        if is_direct:
+            AIRPULSE_ACTIVE_TRANSFERS[transfer_id] = {
+                "id": transfer_id, "direction": f"{req['sender_name']} → {SERVER_NAME}",
+                "sender_name": req["sender_name"], "transferred_bytes": 0, "total_bytes": req["total_size"],
+                "current_file": req["files"][0]["name"], "file_index": 1, "total_files": req["total_count"],
+                "speed_mb": 0.0, "percent": 0, "status": "in_progress", "message": "Receiving files directly (QR verified)…",
+                "token": transfer_token, "files_received": set(), "files_in_progress": set(), "last_update": time.time()
+            }
+    log_server_event(f"AirPulse request from {req['sender_name']}: {len(clean_files)} files (direct={is_direct})", "INFO")
+    if is_direct:
+        return {"status": "accepted", "transfer_id": transfer_id, "transfer_token": transfer_token}
     return {"status": "pending", "request_id": req_id}
 
 @app.get('/airpulse/check-request')
@@ -2599,6 +2638,7 @@ async def airpulse_send_files(request: Request) -> dict:
     try: body = await request.json()
     except Exception: raise HTTPException(status_code=400, detail="Invalid JSON")
     target_ip, target_port, file_paths = body.get("target_ip"), int(body.get("target_port",5055)), body.get("file_paths",[])
+    is_direct = bool(body.get("direct", False))
     if not target_ip or not file_paths: raise HTTPException(status_code=400, detail="Target and files are required")
     valid_files=[]
     for path in file_paths:
@@ -2608,13 +2648,14 @@ async def airpulse_send_files(request: Request) -> dict:
     with AIRPULSE_LOCK:
         AIRPULSE_ACTIVE_TRANSFERS[tx_id]={"id":tx_id,"direction":f"{SERVER_NAME} → {target_ip}","transferred_bytes":0,
             "total_bytes":total_size,"current_file":valid_files[0]["name"],"file_index":1,"total_files":len(valid_files),
-            "speed_mb":0.0,"percent":0,"status":"requesting","message":f"Requesting approval from {target_ip}…"}
+            "speed_mb":0.0,"percent":0,"status":"requesting",
+            "message": "Direct sending files (QR connection)…" if is_direct else f"Requesting approval from {target_ip}…"}
     def send_worker():
         try:
             import http.client, concurrent.futures, urllib.parse, urllib.request
             payload=json.dumps({"sender_name":SERVER_NAME,"sender_os":sys.platform,"sender_ip":get_lan_ip(),
                 "files":[{"name":f["name"],"size":f["size"]} for f in valid_files],"total_size":total_size,
-                "total_count":len(valid_files)}).encode()
+                "total_count":len(valid_files), "direct": is_direct}).encode()
             req=urllib.request.Request(f"http://{target_ip}:{target_port}/airpulse/request",data=payload,headers={"Content-Type":"application/json"})
             with urllib.request.urlopen(req,timeout=100) as resp: result=json.loads(resp.read().decode())
             status, remote_id, token=result.get("status"), result.get("transfer_id"), result.get("transfer_token")

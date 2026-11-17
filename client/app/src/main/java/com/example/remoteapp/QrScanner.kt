@@ -42,7 +42,8 @@ private const val TAG = "QrScanner"
 @Composable
 fun QrScannerDialog(
     onDismiss: () -> Unit,
-    onQrScanned: (pcName: String, pcTarget: String, pin: String) -> Unit
+    onQrScanned: (pcName: String, pcTarget: String, pin: String) -> Unit,
+    onQrScannedDetailed: ((pcName: String, pcTarget: String, pin: String, ssid: String, isDirect: Boolean) -> Unit)? = null
 ) {
     val context = LocalContext.current
     var hasCameraPermission by remember {
@@ -78,6 +79,7 @@ fun QrScannerDialog(
             if (hasCameraPermission) {
                 CameraPreviewWithScanner(
                     onQrScanned = onQrScanned,
+                    onQrScannedDetailed = onQrScannedDetailed,
                     onClose = onDismiss
                 )
             } else {
@@ -127,6 +129,7 @@ fun QrScannerDialog(
 @Composable
 private fun CameraPreviewWithScanner(
     onQrScanned: (pcName: String, pcTarget: String, pin: String) -> Unit,
+    onQrScannedDetailed: ((pcName: String, pcTarget: String, pin: String, ssid: String, isDirect: Boolean) -> Unit)? = null,
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
@@ -196,7 +199,7 @@ private fun CameraPreviewWithScanner(
                             val text = result.text
                             if (!text.isNullOrEmpty() && !hasScanned) {
                                 hasScanned = true
-                                parseAndDispatchQr(text, onQrScanned)
+                                parseAndDispatchQr(text, onQrScanned, onQrScannedDetailed)
                             }
                         } catch (_: NotFoundException) {
                             // No QR code in this frame
@@ -354,18 +357,41 @@ private fun CameraPreviewWithScanner(
 
 private fun parseAndDispatchQr(
     rawText: String,
-    onQrScanned: (pcName: String, pcTarget: String, pin: String) -> Unit
+    onQrScanned: (pcName: String, pcTarget: String, pin: String) -> Unit,
+    onQrScannedDetailed: ((pcName: String, pcTarget: String, pin: String, ssid: String, isDirect: Boolean) -> Unit)? = null
 ) {
     try {
-        if (rawText.startsWith("REMOTEPC_AIRPULSE_SENDER|") || rawText.startsWith("REMOTEPC|")) {
+        if (rawText.startsWith("REMOTEPC_AIRPULSE_SENDER|")) {
             val parts = rawText.split("|")
             val pcName = parts.getOrNull(1)?.trim() ?: "Device"
             val ip = parts.getOrNull(2)?.trim() ?: ""
+            val port = parts.getOrNull(3)?.trim() ?: "5056"
+            val ssid = parts.getOrNull(4)?.trim() ?: ""
+            if (ip.isNotEmpty()) {
+                val target = if (port.isNotEmpty()) "$ip:$port" else "$ip:5056"
+                if (onQrScannedDetailed != null) {
+                    onQrScannedDetailed(pcName, target, "", ssid, true)
+                } else {
+                    onQrScanned(pcName, target, "")
+                }
+                return
+            }
+        }
+
+        if (rawText.startsWith("REMOTEPC|")) {
+            val parts = rawText.split("|")
+            val pcName = parts.getOrNull(1)?.trim() ?: "PC"
+            val ip = parts.getOrNull(2)?.trim() ?: ""
             val port = parts.getOrNull(3)?.trim() ?: "5055"
             val pin = parts.getOrNull(4)?.trim() ?: ""
+            val ssid = parts.getOrNull(5)?.trim() ?: ""
             if (ip.isNotEmpty()) {
                 val target = if (port.isNotEmpty()) "$ip:$port" else "$ip:5055"
-                onQrScanned(pcName, target, pin)
+                if (onQrScannedDetailed != null) {
+                    onQrScannedDetailed(pcName, target, pin, ssid, false)
+                } else {
+                    onQrScanned(pcName, target, pin)
+                }
                 return
             }
         }
@@ -373,7 +399,11 @@ private fun parseAndDispatchQr(
         // Alternative standard format: http://ip:port or ip:port
         val clean = rawText.replace("http://", "").replace("https://", "").trim()
         if (clean.contains(":")) {
-            onQrScanned("PC", clean, "")
+            if (onQrScannedDetailed != null) {
+                onQrScannedDetailed("PC", clean, "", "", false)
+            } else {
+                onQrScanned("PC", clean, "")
+            }
         }
     } catch (e: Exception) {
         Log.e(TAG, "Failed to parse QR content: $rawText", e)

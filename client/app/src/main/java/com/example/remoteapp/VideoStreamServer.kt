@@ -386,7 +386,10 @@ class VideoStreamServer(
                 }
                 return
             } else if (uri.startsWith("/airpulse/status")) {
-                val json = "{\"status\":\"ok\",\"device_name\":\"${Build.MODEL}\",\"os\":\"android\",\"port\":$port,\"receive_mode\":$airPulseReceiveMode}"
+                val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                var ssid = wm?.connectionInfo?.ssid?.replace("\"", "") ?: ""
+                if (ssid == "<unknown ssid>") ssid = ""
+                val json = "{\"status\":\"ok\",\"device_name\":\"${Build.MODEL}\",\"os\":\"android\",\"port\":$port,\"receive_mode\":$airPulseReceiveMode,\"wifi_ssid\":\"$ssid\"}"
                 sendJsonResponse(out, json)
                 return
             } else if (uri.startsWith("/airpulse/cancel-transfer")) {
@@ -440,12 +443,13 @@ class VideoStreamServer(
                 val transferToken = java.util.UUID.randomUUID().toString() + java.util.UUID.randomUUID().toString()
                 bodyJson.put("airpulse_transfer_id", txId)
                 bodyJson.put("airpulse_transfer_token", transferToken)
+                val isDirect = bodyJson.optBoolean("direct", false)
                 val lock = Object()
-                var userAccepted = false
-                var answered = false
+                var userAccepted = isDirect
+                var answered = isDirect
                 val callback: (Boolean) -> Unit = { accepted -> synchronized(lock) { if (!answered) { answered = true; userAccepted = accepted; lock.notifyAll() } } }
                 val listener = onAirPulseRequest
-                if (listener != null) {
+                if (listener != null && !isDirect) {
                     listener.invoke(bodyJson, callback)
                     synchronized(lock) { try { if (!answered) lock.wait(90000L) } catch (_: Exception) {} }
                 }
