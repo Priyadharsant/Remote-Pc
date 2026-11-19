@@ -258,8 +258,8 @@ async function main() {
   const isLinux = process.argv.includes("--linux");
   const hasExe = !isApkOnly && fs.existsSync(exePath);
   const hasApk = !isExeOnly && fs.existsSync(apkPath);
-  const hasDeb = isLinux && fs.existsSync(debPath);
-  const hasTar = isLinux && fs.existsSync(tarPath);
+  const hasDeb = !isExeOnly && !isApkOnly && fs.existsSync(debPath);
+  const hasTar = !isExeOnly && !isApkOnly && fs.existsSync(tarPath);
 
   if (!hasExe && !hasApk && !hasDeb && !hasTar) {
     throw new Error("No release binaries found.");

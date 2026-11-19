@@ -39,7 +39,14 @@
       },
       {
         "from": "../server",
-        "to": "server"
+        "to": "server",
+        "filter": [
+          "!**/.venv/**",
+          "!**/__pycache__/**",
+          "!**/*.pyc",
+          "!**/*.log",
+          "!**/bin/**"
+        ]
       }
     ],
     "win": {
@@ -51,10 +58,16 @@
     "linux": {
       "icon": "../server/logo.png",
       "category": "Utility",
+      "artifactName": "Remote_PC_Ubuntu_${arch}.${ext}",
       "target": [
         "dir",
-        "AppImage"
+        "deb"
       ]
+    },
+    "deb": {
+      "packageName": "remote-pc",
+      "synopsis": "Remote PC Control Suite & Wireless Server GUI",
+      "category": "Utility"
     }
   },
   "dependencies": {
@@ -83,7 +96,7 @@
     "wait-on": "^9.5.1"
   },
   "optionalDependencies": {
-    "@rolldown/binding-linux-x64-gnu": "^1.2.16",
+    "@rolldown/binding-linux-x64-gnu": "^1.3.3",
     "@rolldown/binding-win32-x64-msvc": "^1.2.16"
   }
 }

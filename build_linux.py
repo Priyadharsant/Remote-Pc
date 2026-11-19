@@ -10,6 +10,8 @@ import subprocess
 import shutil
 import time
 import argparse
+import glob
+import tarfile
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 SERVER_DIR = os.path.join(ROOT_DIR, "server")
@@ -144,11 +146,20 @@ def build(args):
                 "--hidden-import=uvicorn.lifespan.on",
                 "--hidden-import=pynput.keyboard._xorg",
                 "--hidden-import=pynput.mouse._xorg",
+                "--hidden-import=controllers.thumbnail_generator",
                 "--collect-all=mss",
                 "--collect-all=sounddevice",
                 "--collect-all=websockets",
                 "--collect-all=platformdirs",
                 "--copy-metadata=platformdirs",
+                "--exclude-module=torch",
+                "--exclude-module=torchvision",
+                "--exclude-module=torchaudio",
+                "--exclude-module=scipy",
+                "--exclude-module=matplotlib",
+                "--exclude-module=triton",
+                "--exclude-module=pandas",
+                "--exclude-module=tkinter",
                 f"--distpath={ROOT_DIR}",
                 f"--workpath={os.path.join(ROOT_DIR, 'build', 'server_linux')}",
                 os.path.join(SERVER_DIR, "Remote_Server.py")
@@ -176,7 +187,13 @@ def build(args):
             print(f" 🎨 Building 2/2: Electron Desktop GUI for Linux ({gui_reason})")
             print("=" * 60)
             t0 = time.time()
-            npm_cmd = "npm run pack:appimage" if args.appimage else "npm run build:gui:linux"
+            if args.appimage:
+                npm_cmd = "npm run pack:appimage"
+            elif args.deb or args.all:
+                npm_cmd = "npm run pack:deb"
+            else:
+                npm_cmd = "npm run build:gui:linux"
+
             env = dict(os.environ)
             local_bin = os.path.expanduser("~/.local/bin")
             if local_bin not in env.get("PATH", ""):
@@ -198,6 +215,14 @@ def build(args):
                 except Exception:
                     pass
             print(f"✓ Desktop GUI built in {time.time() - t0:.1f}s")
+
+            # Copy generated Debian package to project root
+            if args.deb or args.all:
+                deb_files = glob.glob(os.path.join(DESKTOP_GUI_DIR, "dist-electron", "*.deb"))
+                if deb_files:
+                    target_deb = os.path.join(ROOT_DIR, "Remote_PC_Ubuntu_amd64.deb")
+                    shutil.copy2(deb_files[0], target_deb)
+                    print(f"✓ Packaged Ubuntu Debian installer -> {target_deb} ({os.path.getsize(target_deb) / (1024*1024):.1f} MB)")
         else:
             print(f"⚡ Skipping Desktop GUI build: {gui_reason}")
     else:
@@ -205,10 +230,45 @@ def build(args):
 
     create_desktop_shortcut()
 
+    # Package generic Linux tarball bundle if requested
+    tar_path = None
+    if args.tar or args.all:
+        tar_path = os.path.join(ROOT_DIR, "Remote_PC_Linux_x86_64.tar.gz")
+        print("\n" + "=" * 60)
+        print(" 📦 Packaging Standalone Linux Bundle: Remote_PC_Linux_x86_64.tar.gz")
+        print("=" * 60)
+        t_tar = time.time()
+        def tar_filter(tarinfo):
+            name = tarinfo.name
+            if any(skip in name for skip in (".venv", "__pycache__", ".git", ".idea", ".vscode")) or name.endswith(".pyc") or name.endswith(".log"):
+                return None
+            return tarinfo
+
+        with tarfile.open(tar_path, "w:gz") as tar:
+            if os.path.exists(server_bin):
+                tar.add(server_bin, arcname="Remote_Server")
+            unpacked_gui = os.path.join(DESKTOP_GUI_DIR, "dist-electron", "linux-unpacked")
+            if os.path.exists(unpacked_gui):
+                tar.add(unpacked_gui, arcname="desktop-gui", filter=tar_filter)
+            for f in ["start_ubuntu.sh", "install_ubuntu.sh", "uninstall_ubuntu.sh", "config.json"]:
+                p = os.path.join(ROOT_DIR, f)
+                if os.path.exists(p):
+                    tar.add(p, arcname=f)
+            server_dir = os.path.join(ROOT_DIR, "server")
+            if os.path.exists(server_dir):
+                tar.add(server_dir, arcname="server", filter=tar_filter)
+        print(f"✓ Standalone Linux tarball created in {time.time() - t_tar:.1f}s -> {tar_path} ({os.path.getsize(tar_path) / (1024*1024):.1f} MB)")
+
+    deb_path = os.path.join(ROOT_DIR, "Remote_PC_Ubuntu_amd64.deb")
+
     print("\n" + "=" * 60)
     print(f" 🎉 Ubuntu / Linux Build Complete in {time.time() - start_total:.1f}s!")
-    print(f"   • Core Server: {server_bin}")
-    print(f"   • Desktop GUI: {gui_bin}")
+    print(f"   • Core Server:  {server_bin}")
+    print(f"   • Desktop GUI:  {gui_bin}")
+    if os.path.exists(deb_path):
+        print(f"   • Debian (.deb): {deb_path} ({os.path.getsize(deb_path) / (1024*1024):.1f} MB)")
+    if tar_path and os.path.exists(tar_path):
+        print(f"   • Tarball (.tar.gz): {tar_path} ({os.path.getsize(tar_path) / (1024*1024):.1f} MB)")
     print("=" * 60)
 
 def main():
@@ -220,6 +280,9 @@ def main():
     parser.add_argument("--skip-server", action="store_true", help="Skip Core Server build")
     parser.add_argument("--skip-gui", action="store_true", help="Skip Desktop GUI build")
     parser.add_argument("--appimage", action="store_true", help="Package Desktop GUI as AppImage")
+    parser.add_argument("--deb", action="store_true", help="Package Desktop GUI as Debian (.deb) package")
+    parser.add_argument("--tar", action="store_true", help="Package Linux release tarball bundle")
+    parser.add_argument("--all", action="store_true", help="Build Server, GUI, Debian (.deb) package, and tarball bundle")
     args = parser.parse_args()
 
     build(args)
