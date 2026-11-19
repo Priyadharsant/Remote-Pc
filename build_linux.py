@@ -218,10 +218,11 @@ def build(args):
 
             # Copy generated Debian package to project root
             if args.deb or args.all:
-                deb_files = glob.glob(os.path.join(DESKTOP_GUI_DIR, "dist-electron", "*.deb"))
+                deb_files = sorted(glob.glob(os.path.join(DESKTOP_GUI_DIR, "dist-electron", "*.deb")), key=os.path.getmtime, reverse=True)
                 if deb_files:
                     target_deb = os.path.join(ROOT_DIR, "Remote_PC_Ubuntu_amd64.deb")
-                    shutil.copy2(deb_files[0], target_deb)
+                    if os.path.abspath(deb_files[0]) != os.path.abspath(target_deb):
+                        shutil.copy2(deb_files[0], target_deb)
                     print(f"✓ Packaged Ubuntu Debian installer -> {target_deb} ({os.path.getsize(target_deb) / (1024*1024):.1f} MB)")
         else:
             print(f"⚡ Skipping Desktop GUI build: {gui_reason}")
