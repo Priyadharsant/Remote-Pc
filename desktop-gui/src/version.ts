@@ -61,15 +61,21 @@ export async function checkForAppUpdates(): Promise<AppUpdateData> {
       const rawTag = ghData.tag_name || ghData.name || "";
       const latestVer = rawTag.replace(/^v/i, "").trim();
 
-      const exeAsset = ghData.assets?.find(
-        (a: any) =>
-          typeof a.name === "string" &&
-          (a.name.endsWith(".exe") || a.name.includes("Setup") || a.name.includes("Remote_PC"))
-      );
+      const isLinux = typeof navigator !== "undefined" && navigator.userAgent.toLowerCase().includes("linux");
+      const matchingAsset = ghData.assets?.find((a: any) => {
+        if (!a || typeof a.name !== "string") return false;
+        const name = a.name.toLowerCase();
+        if (isLinux) {
+          return name.endsWith(".deb") || name.endsWith(".appimage");
+        }
+        return name.endsWith(".exe") || name.includes("setup");
+      });
 
-      const downloadUrl =
-        exeAsset?.browser_download_url ||
-        `https://github.com/${GITHUB_REPO}/releases/download/${rawTag}/Remote_PC_Setup.exe`;
+      const fallbackUrl = isLinux
+        ? `https://github.com/${GITHUB_REPO}/releases/download/${rawTag}/Remote_PC_Ubuntu_amd64.deb`
+        : `https://github.com/${GITHUB_REPO}/releases/download/${rawTag}/Remote_PC_Setup.exe`;
+
+      const downloadUrl = matchingAsset?.browser_download_url || fallbackUrl;
 
       const hasUpdate = compareSemver(latestVer, APP_VERSION) > 0;
       return {

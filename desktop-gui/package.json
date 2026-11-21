@@ -66,8 +66,10 @@
     },
     "deb": {
       "packageName": "remote-pc",
-      "synopsis": "Remote PC Control Suite & Wireless Server GUI",
-      "category": "Utility"
+      "fpm": [
+        "--replaces=desktop-gui",
+        "--conflicts=desktop-gui"
+      ]
     }
   },
   "dependencies": {

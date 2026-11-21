@@ -4126,6 +4126,9 @@ def get_sync_history(request: Request) -> dict:
     return {"status": "ok", "history": folder_sync.get_sync_history()}
 
 if __name__ == '__main__':
+    import multiprocessing
+    multiprocessing.freeze_support()
+
     # Single-instance check: if server is already running, exit immediately
     try:
         import urllib.request

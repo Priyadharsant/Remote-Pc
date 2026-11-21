@@ -562,7 +562,10 @@ ipcMain.handle('download-and-install-update', async (event, { url, version }) =>
     if (!url) throw new Error('No download URL provided');
     const safeVersion = String(version || 'latest').replace(/[^a-zA-Z0-9._-]/g, '');
     const tempDir = app.getPath('temp');
-    const installerFilename = `Remote_PC_Setup_${safeVersion}.exe`;
+    const isWin = process.platform === 'win32';
+    const rawExt = path.extname(url.split('?')[0]);
+    const ext = rawExt || (isWin ? '.exe' : '.deb');
+    const installerFilename = isWin ? `Remote_PC_Setup_${safeVersion}.exe` : `Remote_PC_Ubuntu_${safeVersion}${ext}`;
     const destPath = path.join(tempDir, installerFilename);
 
     console.log(`[AutoUpdater] Starting multi-stream download: ${url} -> ${destPath}`);
@@ -581,7 +584,7 @@ ipcMain.handle('download-and-install-update', async (event, { url, version }) =>
 
     console.log(`[AutoUpdater] Download completed (${(stats.size / (1024 * 1024)).toFixed(1)} MB). Launching installer...`);
 
-    if (process.platform === 'win32') {
+    if (isWin) {
       // Launch Inno Setup installer (/SILENT /FORCECLOSEAPPLICATIONS /CLOSEAPPLICATIONS)
       const updaterScript = path.join(tempDir, `remotepc_update_${Date.now()}.bat`);
       const scriptContent = [
@@ -602,22 +605,30 @@ ipcMain.handle('download-and-install-update', async (event, { url, version }) =>
         windowsHide: true,
       });
       updaterProc.unref();
+
+      setTimeout(() => {
+        app.isQuitting = true;
+        app.exit(0);
+      }, 300);
     } else {
-      // Linux: make executable and launch AppImage or package
+      // Linux: make executable and launch AppImage or trigger package install via xdg-open
       try {
         fs.chmodSync(destPath, 0o755);
-        const linuxProc = spawn(destPath, [], { detached: true, stdio: 'ignore' });
-        linuxProc.unref();
+        if (destPath.endsWith('.deb')) {
+          const linuxProc = spawn('xdg-open', [destPath], { detached: true, stdio: 'ignore' });
+          linuxProc.unref();
+        } else {
+          const linuxProc = spawn(destPath, [], { detached: true, stdio: 'ignore' });
+          linuxProc.unref();
+          setTimeout(() => {
+            app.isQuitting = true;
+            app.exit(0);
+          }, 300);
+        }
       } catch (err) {
         console.warn('Could not launch update binary directly:', err);
       }
     }
-
-    // Close current Electron application immediately so installer can overwrite files without lock
-    setTimeout(() => {
-      app.isQuitting = true;
-      app.exit(0);
-    }, 300);
 
     return { success: true };
   } catch (err) {
@@ -676,6 +687,7 @@ function launchCoreServer() {
                 detached: true,
                 stdio: 'ignore',
                 cwd: cwd,
+                windowsHide: true,
                 env: { ...process.env }
               });
               child.unref();
@@ -697,7 +709,7 @@ function launchCoreServer() {
         path.join(appPath, 'server', 'Remote_Server.py'),
         path.join(process.resourcesPath, 'server', 'Remote_Server.py')
       ];
-      const pythonCmds = isWin ? ['python', 'py'] : ['python3', 'python'];
+      const pythonCmds = isWin ? ['pythonw', 'python', 'py'] : ['python3', 'python'];
       for (const pyPath of scriptCandidates) {
         if (fs.existsSync(pyPath)) {
           for (const py of pythonCmds) {
@@ -708,6 +720,7 @@ function launchCoreServer() {
                 detached: true,
                 stdio: 'ignore',
                 cwd: cwd,
+                windowsHide: true,
                 env: { ...process.env }
               });
               child.unref();

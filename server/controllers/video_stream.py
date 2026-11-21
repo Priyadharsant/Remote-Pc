@@ -414,7 +414,11 @@ def open_file_on_pc(file_path: str) -> bool:
         except Exception:
             pass
         try:
-            subprocess.Popen(["powershell", "-c", f"Start-Process '{file_path}'"], shell=True)
+            creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == 'win32' else 0
+            subprocess.Popen(
+                ["powershell", "-NoProfile", "-c", f"Start-Process '{file_path}'"],
+                creationflags=creation_flags
+            )
             return True
         except Exception:
             return False
