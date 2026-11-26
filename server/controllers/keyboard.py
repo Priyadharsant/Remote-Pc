@@ -1,5 +1,6 @@
 import sys
 import time
+from controllers.desktop_input import pyautogui, ensure_x11_display_env
 
 try:
     from pynput.keyboard import Controller as PynputKeyboardController, Key
@@ -7,15 +8,25 @@ except Exception:
     PynputKeyboardController = None
     Key = None
 
-from controllers.desktop_input import pyautogui
-
 pyautogui.FAILSAFE = False
 pyautogui.PAUSE = 0
 
-try:
-    _keyboard = PynputKeyboardController() if PynputKeyboardController is not None else None
-except Exception:
-    _keyboard = None
+_keyboard = None
+
+def _get_keyboard():
+    global _keyboard
+    if _keyboard is not None:
+        return _keyboard
+    if PynputKeyboardController is None:
+        return None
+    try:
+        if sys.platform != "win32":
+            ensure_x11_display_env()
+        _keyboard = PynputKeyboardController()
+        return _keyboard
+    except Exception:
+        _keyboard = None
+        return None
 
 # Windows native Virtual Key codes for reliable system-level hotkey injection (Alt+Tab, Ctrl+Tab, etc.)
 _IS_WINDOWS = sys.platform == "win32"
@@ -174,15 +185,17 @@ def press_key(name: str) -> None:
 
     if key_name in _KEY_MAP:
         pynput_attr, pyautogui_name = _KEY_MAP[key_name]
-        if _keyboard is not None and pynput_attr:
+        kb = _get_keyboard()
+        if kb is not None and pynput_attr:
             p_key = getattr(Key, pynput_attr, None)
             if p_key is not None:
                 try:
-                    _keyboard.press(p_key)
-                    _keyboard.release(p_key)
+                    kb.press(p_key)
+                    kb.release(p_key)
                     return
                 except Exception:
-                    pass
+                    global _keyboard
+                    _keyboard = None
         try:
             pyautogui.press(pyautogui_name)
         except Exception:
@@ -215,7 +228,8 @@ def press_hotkey(*keys: str) -> None:
                 pass
 
     # Check if we can use pynput for native low-level keyboard simulation
-    if _keyboard is not None and Key is not None:
+    kb = _get_keyboard()
+    if kb is not None and Key is not None:
         p_keys = []
         for k in norm_keys:
             if k.startswith('key:'):
@@ -231,13 +245,13 @@ def press_hotkey(*keys: str) -> None:
         if p_keys:
             try:
                 for pk in p_keys:
-                    _keyboard.press(pk)
+                    kb.press(pk)
                 time.sleep(0.02)
                 for pk in reversed(p_keys):
-                    _keyboard.release(pk)
+                    kb.release(pk)
                 return
             except Exception:
-                pass
+                _keyboard = None
 
     # Fallback to pyautogui
     valid_keys = []
@@ -270,19 +284,20 @@ def key_down(name: str) -> None:
                 pass
 
     p_key = _get_pynput_key(key_name)
-    if _keyboard is not None:
+    kb = _get_keyboard()
+    if kb is not None:
         if p_key is not None:
             try:
-                _keyboard.press(p_key)
+                kb.press(p_key)
                 return
             except Exception:
-                pass
+                _keyboard = None
         elif len(key_name) == 1:
             try:
-                _keyboard.press(key_name)
+                kb.press(key_name)
                 return
             except Exception:
-                pass
+                _keyboard = None
 
     if key_name in _KEY_MAP:
         pyautogui_name = _KEY_MAP[key_name][1]
@@ -309,19 +324,20 @@ def key_up(name: str) -> None:
                 pass
 
     p_key = _get_pynput_key(key_name)
-    if _keyboard is not None:
+    kb = _get_keyboard()
+    if kb is not None:
         if p_key is not None:
             try:
-                _keyboard.release(p_key)
+                kb.release(p_key)
                 return
             except Exception:
-                pass
+                _keyboard = None
         elif len(key_name) == 1:
             try:
-                _keyboard.release(key_name)
+                kb.release(key_name)
                 return
             except Exception:
-                pass
+                _keyboard = None
 
     if key_name in _KEY_MAP:
         pyautogui_name = _KEY_MAP[key_name][1]
@@ -336,12 +352,13 @@ def type_text_literal(text: str) -> None:
     """Types raw text characters strictly as literal text without triggering hotkeys or key names."""
     if not text:
         return
-    if _keyboard is not None:
+    kb = _get_keyboard()
+    if kb is not None:
         try:
-            _keyboard.type(text)
+            kb.type(text)
             return
         except Exception:
-            pass
+            _keyboard = None
     try:
         pyautogui.write(text, interval=0)
     except Exception:

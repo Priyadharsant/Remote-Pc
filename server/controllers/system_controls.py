@@ -32,9 +32,15 @@ def mute_toggle() -> None:
     if _IS_WINDOWS:
         pyautogui.press('volumemute')
     else:
-        # PipeWire wpctl or ALSA amixer toggle
+        # PipeWire wpctl or PulseAudio pactl or ALSA amixer toggle
         try:
             res = subprocess.run(['wpctl', 'set-mute', '@DEFAULT_AUDIO_SINK@', 'toggle'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.0)
+            if res.returncode == 0:
+                return
+        except Exception:
+            pass
+        try:
+            res = subprocess.run(['pactl', 'set-sink-mute', '@DEFAULT_SINK@', 'toggle'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=1.0)
             if res.returncode == 0:
                 return
         except Exception:
@@ -53,6 +59,12 @@ def open_start_menu() -> None:
     else:
         # Super key toggles GNOME Shell Overview / Dash
         try:
+            from controllers.keyboard import press_key
+            press_key('super')
+            return
+        except Exception:
+            pass
+        try:
             pyautogui.press('super')
         except Exception:
             try:
@@ -65,6 +77,12 @@ def show_desktop() -> None:
         pyautogui.hotkey('win', 'd')
     else:
         # On Ubuntu / GNOME, Super+D or Ctrl+Alt+D shows desktop
+        try:
+            from controllers.keyboard import press_hotkey
+            press_hotkey('super', 'd')
+            return
+        except Exception:
+            pass
         try:
             pyautogui.hotkey('super', 'd')
         except Exception:

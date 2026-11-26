@@ -22,6 +22,10 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Web
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, Response
 
+if sys.platform != "win32":
+    from controllers.desktop_input import ensure_x11_display_env
+    ensure_x11_display_env()
+
 from controllers import brightness, keyboard, media, mouse, system_controls, volume, video_stream, remote_desktop, camera_recorder, folder_sync, thumbnail_generator
 
 

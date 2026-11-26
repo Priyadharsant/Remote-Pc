@@ -24,6 +24,7 @@ if [ -z "$XAUTHORITY" ]; then
         export XAUTHORITY="$HOME/.Xauthority"
     fi
 fi
+xhost +local: >/dev/null 2>&1 || true
 
 MODE="${1:-all}"
 

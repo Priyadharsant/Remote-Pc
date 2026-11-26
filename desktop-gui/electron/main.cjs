@@ -673,6 +673,27 @@ function launchCoreServer() {
         path.join(__dirname, '../../server')
       ];
 
+      const serverEnv = { ...process.env };
+      if (!isWin) {
+        if (!serverEnv.DISPLAY) serverEnv.DISPLAY = ':0';
+        if (!serverEnv.XAUTHORITY || !fs.existsSync(serverEnv.XAUTHORITY)) {
+          const uid = process.getuid ? process.getuid() : 1000;
+          const userDir = `/run/user/${uid}`;
+          if (fs.existsSync(userDir)) {
+            try {
+              const files = fs.readdirSync(userDir);
+              const xauthFile = files.find(f => f.startsWith('.mutter-Xwaylandauth') || f.startsWith('xauth'));
+              if (xauthFile) {
+                serverEnv.XAUTHORITY = path.join(userDir, xauthFile);
+              }
+            } catch (_) {}
+          }
+        }
+        try {
+          spawn('xhost', ['+local:'], { stdio: 'ignore' });
+        } catch (_) {}
+      }
+
       for (const dir of searchDirs) {
         for (const bName of binaryNames) {
           const sPath = path.join(dir, bName);
@@ -688,7 +709,7 @@ function launchCoreServer() {
                 stdio: 'ignore',
                 cwd: cwd,
                 windowsHide: true,
-                env: { ...process.env }
+                env: serverEnv
               });
               child.unref();
               return resolve({ success: true, path: sPath });
@@ -721,7 +742,7 @@ function launchCoreServer() {
                 stdio: 'ignore',
                 cwd: cwd,
                 windowsHide: true,
-                env: { ...process.env }
+                env: serverEnv
               });
               child.unref();
               return resolve({ success: true, path: pyPath });
