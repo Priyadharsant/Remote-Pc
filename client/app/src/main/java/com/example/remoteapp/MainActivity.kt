@@ -69,6 +69,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -991,20 +992,23 @@ class MainActivity : FragmentActivity() {
                                         Row(verticalAlignment = Alignment.CenterVertically) {
                                             Box(
                                                 modifier = Modifier
-                                                    .size(44.dp)
+                                                    .size(46.dp)
                                                     .clip(CircleShape)
                                                     .background(
                                                         Brush.linearGradient(
                                                             listOf(AppTheme.AccentCyan.copy(alpha = 0.25f), AppTheme.AccentSky.copy(alpha = 0.1f))
                                                         )
                                                     )
-                                                    .border(1.dp, AppTheme.AccentCyan.copy(alpha = 0.5f), CircleShape),
+                                                    .border(1.5.dp, AppTheme.AccentCyan.copy(alpha = 0.6f), CircleShape),
                                                 contentAlignment = Alignment.Center
                                             ) {
                                                 Image(
                                                     painter = painterResource(id = R.drawable.logo),
                                                     contentDescription = "Remote PC logo",
-                                                    modifier = Modifier.size(38.dp).clip(RoundedCornerShape(11.dp))
+                                                    contentScale = ContentScale.Crop,
+                                                    modifier = Modifier
+                                                        .fillMaxSize()
+                                                        .clip(CircleShape)
                                                 )
                                             }
                                             Spacer(Modifier.width(12.dp))
