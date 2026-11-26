@@ -611,12 +611,51 @@ ipcMain.handle('download-and-install-update', async (event, { url, version }) =>
         app.exit(0);
       }, 300);
     } else {
-      // Linux: make executable and launch AppImage or trigger package install via xdg-open
+      // Linux: make executable and launch installer
       try {
         fs.chmodSync(destPath, 0o755);
         if (destPath.endsWith('.deb')) {
-          const linuxProc = spawn('xdg-open', [destPath], { detached: true, stdio: 'ignore' });
-          linuxProc.unref();
+          console.log('[AutoUpdater] Triggering debian package install via pkexec:', destPath);
+          try {
+            spawn('pkill', ['-f', 'Remote_Server'], { stdio: 'ignore' });
+          } catch (_) {}
+
+          let spawned = false;
+          // 1. Try PolicyKit pkexec for native system authentication dialog
+          try {
+            const pkexecProc = spawn('pkexec', ['dpkg', '-i', destPath], {
+              detached: true,
+              stdio: 'ignore'
+            });
+            pkexecProc.unref();
+            spawned = true;
+          } catch (e) {
+            console.warn('[AutoUpdater] pkexec spawn failed:', e);
+          }
+
+          if (!spawned) {
+            // 2. Fallback: try terminal prompt
+            try {
+              const termProc = spawn('gnome-terminal', ['--', 'bash', '-c', `echo "Installing Remote PC update..."; sudo dpkg -i "${destPath}"; echo "Installation complete. Press Enter to exit."; read`], {
+                detached: true,
+                stdio: 'ignore'
+              });
+              termProc.unref();
+              spawned = true;
+            } catch (_) {}
+          }
+
+          if (!spawned) {
+            const dir = path.dirname(destPath);
+            try {
+              spawn('xdg-open', [dir], { detached: true, stdio: 'ignore' }).unref();
+            } catch (_) {}
+          }
+
+          setTimeout(() => {
+            app.isQuitting = true;
+            app.exit(0);
+          }, 1200);
         } else {
           const linuxProc = spawn(destPath, [], { detached: true, stdio: 'ignore' });
           linuxProc.unref();

@@ -1324,7 +1324,9 @@ class MainActivity : FragmentActivity() {
                                         onResetSetup = {
                                             selectedDevice = null
                                             currentScreen = "setup"
-                                        }
+                                        },
+                                        isMasterPower = isMasterPower,
+                                        onToggleMasterPower = toggleMasterPower
                                     )
                                 }
                                 "discovery" -> {
@@ -1337,8 +1339,6 @@ class MainActivity : FragmentActivity() {
                                     DiscoveryScreen(
                                         devices = discoveredDevices,
                                         isScanning = isScanningServers,
-                                        isMasterPower = isMasterPower,
-                                        onToggleMasterPower = toggleMasterPower,
                                         onSelect = { handleSelectDevice(it) },
                                         onRefresh = {
                                             discoveredDevices = emptyList()
@@ -1348,6 +1348,7 @@ class MainActivity : FragmentActivity() {
                                             )
                                         },
                                         onScanQrClick = { showQrScanner = true },
+                                        onNavigateAirPulse = { currentScreen = "airpulse" },
                                         onMenuClick = { scope.launch { drawerState.open() } },
                                         onSettingsClick = { currentScreen = "settings" }
                                     )
@@ -1366,8 +1367,6 @@ class MainActivity : FragmentActivity() {
                                         volume = currentVolume,
                                         brightness = currentBrightness,
                                         isAutoConnected = isAutoConnected,
-                                        isMasterPower = isMasterPower,
-                                        onToggleMasterPower = toggleMasterPower,
                                         onSetupAutoConnect = {
                                             if (isAutoConnected) {
                                                 prefs.edit().putBoolean(KEY_AUTO_CONNECT_ENABLED, false).apply()
@@ -1984,11 +1983,10 @@ fun MasterPowerCard(
 fun DiscoveryScreen(
     devices: List<Pair<String, String>>,
     isScanning: Boolean = false,
-    isMasterPower: Boolean = true,
-    onToggleMasterPower: (Boolean) -> Unit = {},
     onSelect: (Pair<String, String>) -> Unit,
     onRefresh: () -> Unit,
     onScanQrClick: () -> Unit,
+    onNavigateAirPulse: () -> Unit = {},
     onMenuClick: () -> Unit,
     onSettingsClick: (() -> Unit)? = null
 ) {
@@ -2008,12 +2006,30 @@ fun DiscoveryScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { onToggleMasterPower(!isMasterPower) }) {
-                        Icon(
-                            Icons.Rounded.PowerSettingsNew,
-                            contentDescription = if (isMasterPower) "Turn Service OFF" else "Turn Service ON",
-                            tint = if (isMasterPower) AppTheme.AccentEmerald else AppTheme.AccentRose
-                        )
+                    Surface(
+                        onClick = onNavigateAirPulse,
+                        shape = RoundedCornerShape(20.dp),
+                        color = Color(0xFF06B6D4).copy(alpha = 0.16f),
+                        border = BorderStroke(1.dp, Color(0xFF06B6D4).copy(alpha = 0.45f))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Rounded.Sensors,
+                                contentDescription = "AirPulse",
+                                tint = Color(0xFF06B6D4),
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(Modifier.width(5.dp))
+                            Text(
+                                "AirPulse",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color(0xFF06B6D4)
+                            )
+                        }
                     }
                     IconButton(onClick = onScanQrClick) {
                         Icon(Icons.Rounded.QrCodeScanner, contentDescription = "Scan QR Code", tint = AppTheme.AccentCyan)
@@ -2046,12 +2062,6 @@ fun DiscoveryScreen(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            MasterPowerCard(
-                isEnabled = isMasterPower,
-                onToggle = onToggleMasterPower,
-                modifier = Modifier.padding(bottom = 14.dp)
-            )
-
             LiquidScanner(isScanning = isScanning || devices.isEmpty())
 
             Spacer(Modifier.height(16.dp))
@@ -2337,8 +2347,6 @@ fun RemoteControlScreen(
     volume: Float,
     brightness: Float,
     isAutoConnected: Boolean = false,
-    isMasterPower: Boolean = true,
-    onToggleMasterPower: (Boolean) -> Unit = {},
     onSetupAutoConnect: () -> Unit = {},
     onVolumeChange: (Float) -> Unit,
     onBrightnessChange: (Float) -> Unit,
@@ -2377,13 +2385,6 @@ fun RemoteControlScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { onToggleMasterPower(!isMasterPower) }) {
-                        Icon(
-                            Icons.Rounded.PowerSettingsNew,
-                            contentDescription = if (isMasterPower) "Turn Service OFF" else "Turn Service ON",
-                            tint = if (isMasterPower) AppTheme.AccentEmerald else AppTheme.AccentRose
-                        )
-                    }
                     IconButton(onClick = onRefreshStatus) {
                         Icon(Icons.Rounded.Refresh, contentDescription = "Sync", tint = AppTheme.AccentCyan)
                     }
@@ -2402,11 +2403,6 @@ fun RemoteControlScreen(
                 .verticalScroll(rememberScrollState())
                 .padding(16.dp)
         ) {
-            MasterPowerCard(
-                isEnabled = isMasterPower,
-                onToggle = onToggleMasterPower,
-                modifier = Modifier.padding(bottom = 16.dp)
-            )
             // Hero PC Status Card
             Card(
                 modifier = Modifier.fillMaxWidth(),

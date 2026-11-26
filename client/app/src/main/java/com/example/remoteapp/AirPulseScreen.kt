@@ -117,7 +117,9 @@ fun AirPulseScreen(
 
     // Sender QR state
     var showSenderQrDialog by remember { mutableStateOf(false) }
+    var showReceiveQrDialog by remember { mutableStateOf(false) }
     var senderQrBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
+    var pendingTargetAfterFilePick by remember { mutableStateOf<AirPulseDiscoveredPeer?>(null) }
 
     // Receive Mode State
     var qrBitmap by remember { mutableStateOf<ImageBitmap?>(null) }
@@ -297,65 +299,58 @@ fun AirPulseScreen(
         } catch (_: Exception) {}
     }
 
-    // Receiver availability is advertised only while the user has this mode enabled.
-    LaunchedEffect(activeMode) {
+    // Receiver availability is advertised continuously while on this Quick Share screen.
+    LaunchedEffect(Unit) {
         receiverBeaconJob?.cancel()
         receiverBeaconJob = null
         val srv = VideoStreamServer.getInstance()
-        if (activeMode == "receive") {
-            generateQrCode()
-            srv?.let { server ->
-                server.airPulseReceiveMode = true
-                server.onAirPulseRequest = { req, cb ->
-                    scope.launch(Dispatchers.Main) {
-                        incomingRequestJson = req
-                        incomingRequestCallback = cb
-                        val sName = req.optString("sender_name", "Nearby Device")
-                        val fCount = req.optInt("total_count", 1)
-                        val sBytes = req.optLong("total_size", 0L)
-                        showIncomingNotification(sName, fCount, sBytes)
-                    }
+        generateQrCode()
+        srv?.let { server ->
+            server.airPulseReceiveMode = true
+            server.onAirPulseRequest = { req, cb ->
+                scope.launch(Dispatchers.Main) {
+                    incomingRequestJson = req
+                    incomingRequestCallback = cb
+                    val sName = req.optString("sender_name", "Nearby Device")
+                    val fCount = req.optInt("total_count", 1)
+                    val sBytes = req.optLong("total_size", 0L)
+                    showIncomingNotification(sName, fCount, sBytes)
                 }
             }
-            receiverBeaconJob = scope.launch(Dispatchers.IO) {
-                var multicastLock: WifiManager.MulticastLock? = null
-                try {
-                    val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-                    multicastLock = wm?.createMulticastLock("airpulse_rx_lock")?.apply {
-                        setReferenceCounted(true)
-                        acquire()
-                    }
-                } catch (_: Exception) {}
+        }
+        receiverBeaconJob = scope.launch(Dispatchers.IO) {
+            var multicastLock: WifiManager.MulticastLock? = null
+            try {
+                val wm = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+                multicastLock = wm?.createMulticastLock("airpulse_rx_lock")?.apply {
+                    setReferenceCounted(true)
+                    acquire()
+                }
+            } catch (_: Exception) {}
 
-                val bcasts = getBroadcastAddresses()
-                while (isActive && srv?.airPulseReceiveMode == true) {
-                    try {
-                        val packetText = "AIRPULSE_PEER|${Build.MODEL.take(64)}|5056|android|1"
-                        val bytes = packetText.toByteArray()
-                        DatagramSocket().use { socket ->
-                            socket.broadcast = true
-                            for (targetAddr in bcasts) {
-                                try {
-                                    socket.send(DatagramPacket(bytes, bytes.size, targetAddr, 9999))
-                                } catch (_: Exception) {}
-                            }
+            val bcasts = getBroadcastAddresses()
+            while (isActive && srv?.airPulseReceiveMode == true) {
+                try {
+                    val packetText = "AIRPULSE_PEER|${Build.MODEL.take(64)}|5056|android|1"
+                    val bytes = packetText.toByteArray()
+                    DatagramSocket().use { socket ->
+                        socket.broadcast = true
+                        for (targetAddr in bcasts) {
+                            try {
+                                socket.send(DatagramPacket(bytes, bytes.size, targetAddr, 9999))
+                            } catch (_: Exception) {}
                         }
-                    } catch (_: Exception) { }
-                    delay(1800)
-                }
+                    }
+                } catch (_: Exception) { }
+                delay(1800)
+            }
 
-                try {
-                    if (multicastLock?.isHeld == true) multicastLock.release()
-                } catch (_: Exception) {}
-            }
-        } else {
-            srv?.let { server ->
-                server.airPulseReceiveMode = false
-                server.onAirPulseRequest = null
-            }
-            incomingRequestJson = null
+            try {
+                if (multicastLock?.isHeld == true) multicastLock.release()
+            } catch (_: Exception) {}
         }
     }
+
     DisposableEffect(Unit) {
         onDispose {
             receiverBeaconJob?.cancel()
@@ -365,6 +360,8 @@ fun AirPulseScreen(
             }
         }
     }
+
+    var sendFilesRef by remember { mutableStateOf<((AirPulseDiscoveredPeer) -> Unit)?>(null) }
 
     // SAF Multi-File Picker
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -386,6 +383,11 @@ fun AirPulseScreen(
                 list.add(AirPulseSelectedFile(u, name, size))
             }
             selectedFiles = selectedFiles + list
+            val target = pendingTargetAfterFilePick
+            if (target != null) {
+                pendingTargetAfterFilePick = null
+                sendFilesRef?.invoke(target)
+            }
         }
     }
 
@@ -467,8 +469,10 @@ fun AirPulseScreen(
         }
     }
 
-    LaunchedEffect(activeMode) {
-        if (activeMode == "send") {
+    LaunchedEffect(Unit) {
+        scanPeers()
+        while (isActive) {
+            delay(5000)
             scanPeers()
         }
     }
@@ -476,7 +480,9 @@ fun AirPulseScreen(
     // Send Files Worker
     fun sendFilesToTarget(target: AirPulseDiscoveredPeer, directMode: Boolean = false) {
         if (selectedFiles.isEmpty()) {
-            Toast.makeText(context, "Select at least one file to beam", Toast.LENGTH_SHORT).show()
+            Toast.makeText(context, "Select files to beam to ${target.name}", Toast.LENGTH_SHORT).show()
+            pendingTargetAfterFilePick = target
+            filePickerLauncher.launch(arrayOf("*/*"))
             return
         }
 
@@ -657,6 +663,7 @@ fun AirPulseScreen(
             }
         }
     }
+    sendFilesRef = { sendFilesToTarget(it) }
 
     LaunchedEffect(activeTransfer?.id, activeTransfer?.direction) {
         val transfer = activeTransfer
@@ -686,6 +693,26 @@ fun AirPulseScreen(
         }
     }
 
+    val infiniteTransition = rememberInfiniteTransition(label = "RadarSonar")
+    val pulseScale by infiniteTransition.animateFloat(
+        initialValue = 0.35f,
+        targetValue = 1.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2400, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "PulseScale"
+    )
+    val pulseAlpha by infiniteTransition.animateFloat(
+        initialValue = 0.7f,
+        targetValue = 0.0f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(2400, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "PulseAlpha"
+    )
+
     Scaffold(
         containerColor = AppTheme.BackgroundDark,
         topBar = {
@@ -694,23 +721,37 @@ fun AirPulseScreen(
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Box(
                             modifier = Modifier
-                                .size(32.dp)
+                                .size(34.dp)
                                 .clip(RoundedCornerShape(10.dp))
                                 .background(Color(0xFF06B6D4).copy(alpha = 0.2f)),
                             contentAlignment = Alignment.Center
                         ) {
-                            Icon(Icons.Rounded.Sensors, contentDescription = null, tint = Color(0xFF06B6D4), modifier = Modifier.size(18.dp))
+                            Icon(Icons.Rounded.Bolt, contentDescription = null, tint = Color(0xFF06B6D4), modifier = Modifier.size(20.dp))
                         }
                         Spacer(Modifier.width(10.dp))
                         Column {
-                            Text("AirPulse Drop", fontWeight = FontWeight.Bold, color = AppTheme.TextPrimary, fontSize = 16.sp)
-                            Text("Zero-Setup P2P Beam", fontSize = 11.sp, color = Color(0xFF10B981))
+                            Text("AirPulse Quick Share", fontWeight = FontWeight.Bold, color = AppTheme.TextPrimary, fontSize = 16.sp)
+                            Text("Ready to share & receive on Wi-Fi", fontSize = 11.sp, color = Color(0xFF10B981))
                         }
                     }
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back", tint = AppTheme.TextPrimary)
+                    }
+                },
+                actions = {
+                    IconButton(onClick = { scanPeers() }) {
+                        Icon(Icons.Rounded.Refresh, contentDescription = "Scan Peers", tint = Color(0xFF06B6D4))
+                    }
+                    IconButton(onClick = {
+                        generateQrCode()
+                        showReceiveQrDialog = true
+                    }) {
+                        Icon(Icons.Rounded.QrCode, contentDescription = "Receive QR", tint = AppTheme.TextPrimary)
+                    }
+                    IconButton(onClick = { showAirPulseQrScanner = true }) {
+                        Icon(Icons.Rounded.QrCodeScanner, contentDescription = "Scan QR", tint = AppTheme.TextPrimary)
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = AppTheme.CardDark)
@@ -723,427 +764,382 @@ fun AirPulseScreen(
                 .padding(padding)
                 .padding(horizontal = 14.dp, vertical = 8.dp)
         ) {
-            // Mode Switcher Pill
-            Row(
+
+
+
+
+            LazyColumn(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(AppTheme.BackgroundDark)
-                    .border(1.dp, AppTheme.CardBorderSubtle, RoundedCornerShape(16.dp))
-                    .padding(4.dp),
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    .weight(1f)
+                    .fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
             ) {
-                // Send Tab
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (activeMode == "send") Color(0xFF06B6D4) else Color.Transparent)
-                        .clickable { activeMode = "send" }
-                        .padding(vertical = 10.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.AutoMirrored.Rounded.Send,
-                            contentDescription = null,
-                            tint = if (activeMode == "send") Color(0xFF0B0F19) else Color(0xFF94A3B8),
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            "Send Files",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (activeMode == "send") Color(0xFF0B0F19) else Color(0xFF94A3B8)
-                        )
+                // =================================================================
+                // 1. QUICK SHARE RADAR CARD (Always active & discoverable)
+                // =================================================================
+                item {
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = CardDefaults.cardColors(containerColor = AppTheme.CardDarkElevated),
+                        border = BorderStroke(1.dp, Color(0xFF06B6D4).copy(alpha = 0.35f))
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(16.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            // Pulsing Radar Rings with Central Phone Node
+                            Box(
+                                modifier = Modifier
+                                    .size(130.dp)
+                                    .padding(4.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Canvas(modifier = Modifier.fillMaxSize()) {
+                                    drawCircle(
+                                        color = Color(0xFF06B6D4).copy(alpha = pulseAlpha),
+                                        radius = (size.minDimension / 2f) * pulseScale,
+                                        style = Stroke(width = 3.dp.toPx())
+                                    )
+                                    drawCircle(
+                                        color = Color(0xFF10B981).copy(alpha = (pulseAlpha * 0.7f).coerceIn(0f, 1f)),
+                                        radius = (size.minDimension / 2f) * ((pulseScale + 0.35f) % 1.0f),
+                                        style = Stroke(width = 2.dp.toPx())
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .size(54.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFF06B6D4).copy(alpha = 0.2f))
+                                        .border(2.dp, Color(0xFF06B6D4), CircleShape),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        Icons.Rounded.Smartphone,
+                                        contentDescription = null,
+                                        tint = Color(0xFF06B6D4),
+                                        modifier = Modifier.size(28.dp)
+                                    )
+                                }
+                            }
+
+                            Spacer(Modifier.height(8.dp))
+
+                            Text(
+                                Build.MODEL,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = AppTheme.TextPrimary,
+                                fontSize = 16.sp
+                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.Center,
+                                modifier = Modifier.padding(top = 2.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(7.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFF10B981))
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    "Quick Share Active • ${getLocalIp()}:5056",
+                                    fontSize = 11.sp,
+                                    color = Color(0xFF10B981),
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            }
+                        }
                     }
                 }
 
-                // Receive Tab
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(if (activeMode == "receive") Color(0xFF10B981) else Color.Transparent)
-                        .clickable { activeMode = "receive" }
-                        .padding(vertical = 10.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Icon(
-                            Icons.Rounded.Download,
-                            contentDescription = null,
-                            tint = if (activeMode == "receive") Color(0xFF0B0F19) else Color(0xFF94A3B8),
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            "Receive Radar",
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (activeMode == "receive") Color(0xFF0B0F19) else Color(0xFF94A3B8)
-                        )
+                // =================================================================
+                // 2. QUICK ACTION BAR (Add Files, Photos, IP Beam)
+                // =================================================================
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Button(
+                            onClick = { filePickerLauncher.launch(arrayOf("*/*")) },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF06B6D4)),
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.weight(1.2f),
+                            contentPadding = PaddingValues(vertical = 10.dp, horizontal = 12.dp)
+                        ) {
+                            Icon(Icons.Rounded.AttachFile, contentDescription = null, tint = Color(0xFF0B0F19), modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(6.dp))
+                            Text("Select Files", color = Color(0xFF0B0F19), fontWeight = FontWeight.Bold, fontSize = 12.sp)
+                        }
+
+                        Button(
+                            onClick = { filePickerLauncher.launch(arrayOf("image/*", "video/*")) },
+                            colors = ButtonDefaults.buttonColors(containerColor = AppTheme.CardDarkElevated),
+                            border = BorderStroke(1.dp, AppTheme.CardBorder),
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.weight(1f),
+                            contentPadding = PaddingValues(vertical = 10.dp, horizontal = 10.dp)
+                        ) {
+                            Icon(Icons.Rounded.PhotoLibrary, contentDescription = null, tint = Color(0xFF06B6D4), modifier = Modifier.size(17.dp))
+                            Spacer(Modifier.width(5.dp))
+                            Text("Media", color = AppTheme.TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                        }
+
+                        Button(
+                            onClick = { showPinDialog = true },
+                            colors = ButtonDefaults.buttonColors(containerColor = AppTheme.CardDarkElevated),
+                            border = BorderStroke(1.dp, AppTheme.CardBorder),
+                            shape = RoundedCornerShape(14.dp),
+                            modifier = Modifier.weight(0.9f),
+                            contentPadding = PaddingValues(vertical = 10.dp, horizontal = 8.dp)
+                        ) {
+                            Icon(Icons.Rounded.Dialpad, contentDescription = null, tint = Color(0xFF94A3B8), modifier = Modifier.size(17.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("IP Beam", color = AppTheme.TextPrimary, fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
+                        }
                     }
                 }
-            }
 
-            Spacer(Modifier.height(12.dp))
-
-            // =================================================================
-            // RECEIVER MODE (Option A: Radar Sonar, PIN, QR Code)
-            // =================================================================
-            if (activeMode == "receive") {
-                val infiniteTransition = rememberInfiniteTransition(label = "RadarSonar")
-                val pulseScale by infiniteTransition.animateFloat(
-                    initialValue = 0.3f,
-                    targetValue = 1.0f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(2200, easing = LinearEasing),
-                        repeatMode = RepeatMode.Restart
-                    ),
-                    label = "PulseScale"
-                )
-                val pulseAlpha by infiniteTransition.animateFloat(
-                    initialValue = 0.8f,
-                    targetValue = 0.0f,
-                    animationSpec = infiniteRepeatable(
-                        animation = tween(2200, easing = LinearEasing),
-                        repeatMode = RepeatMode.Restart
-                    ),
-                    label = "PulseAlpha"
-                )
-
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    horizontalAlignment = Alignment.CenterHorizontally
-                ) {
+                // =================================================================
+                // 3. SELECTED FILES TRAY (Deck of items to beam)
+                // =================================================================
+                if (selectedFiles.isNotEmpty()) {
                     item {
                         Card(
                             modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(24.dp),
-                            colors = CardDefaults.cardColors(containerColor = AppTheme.CardDarkElevated),
-                            border = BorderStroke(1.dp, Color(0xFF10B981).copy(alpha = 0.4f))
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = AppTheme.CardDark),
+                            border = BorderStroke(1.dp, Color(0xFF06B6D4).copy(alpha = 0.4f))
                         ) {
-                            Column(
-                                modifier = Modifier.padding(20.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                // Pulsing Sonar Graphic
-                                Box(
-                                    modifier = Modifier
-                                        .size(140.dp)
-                                        .padding(10.dp),
-                                    contentAlignment = Alignment.Center
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
                                 ) {
-                                    Canvas(modifier = Modifier.fillMaxSize()) {
-                                        drawCircle(
-                                            color = Color(0xFF10B981).copy(alpha = pulseAlpha),
-                                            radius = (size.minDimension / 2f) * pulseScale,
-                                            style = Stroke(width = 3.dp.toPx())
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Rounded.FolderZip, contentDescription = null, tint = Color(0xFF06B6D4), modifier = Modifier.size(18.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            "${selectedFiles.size} file(s) selected • ${formatFileSize(selectedFiles.sumOf { it.size })}",
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 12.sp,
+                                            color = AppTheme.TextPrimary
                                         )
                                     }
-                                    Box(
-                                        modifier = Modifier
-                                            .size(56.dp)
-                                            .clip(CircleShape)
-                                            .background(Color(0xFF10B981).copy(alpha = 0.2f)),
-                                        contentAlignment = Alignment.Center
+                                    TextButton(
+                                        onClick = { selectedFiles = emptyList() },
+                                        contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp)
                                     ) {
-                                        Icon(Icons.Rounded.Sensors, contentDescription = null, tint = Color(0xFF10B981), modifier = Modifier.size(30.dp))
+                                        Text("Clear", color = Color(0xFFF43F5E), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                                     }
                                 }
 
-                                Text("Radar Receiver Active", fontSize = 16.sp, fontWeight = FontWeight.Bold, color = AppTheme.TextPrimary)
-                                Text(
-                                    "Nearby devices can see you while Receiver Mode is on. Review every request before files arrive.",
-                                    fontSize = 12.sp,
-                                    color = AppTheme.TextMuted,
-                                    textAlign = TextAlign.Center
-                                )
-
-                                Spacer(Modifier.height(16.dp))
-
-                                Text("Scan this code from another Android device running AirPulse, or choose this phone from its receiver list.", fontSize = 11.sp, color = AppTheme.TextMuted, textAlign = TextAlign.Center)
-                                Spacer(Modifier.height(12.dp))
-
-                                // Dynamic QR Code Box
-                                Text("RECEIVER CONNECTION QR", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = AppTheme.TextMuted, letterSpacing = 1.sp)
                                 Spacer(Modifier.height(8.dp))
 
-                                Box(
-                                    modifier = Modifier
-                                        .size(200.dp)
-                                        .clip(RoundedCornerShape(18.dp))
-                                        .background(Color.White)
-                                        .padding(10.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    if (qrBitmap != null) {
-                                        Image(
-                                            bitmap = qrBitmap!!,
-                                            contentDescription = "AirPulse QR",
-                                            modifier = Modifier.fillMaxSize()
-                                        )
-                                    } else {
-                                        CircularProgressIndicator(color = Color(0xFF10B981))
+                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                    selectedFiles.take(4).forEachIndexed { idx, file ->
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .clip(RoundedCornerShape(8.dp))
+                                                .background(AppTheme.BackgroundDark)
+                                                .padding(horizontal = 10.dp, vertical = 6.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(Icons.Rounded.InsertDriveFile, contentDescription = null, tint = AppTheme.TextMuted, modifier = Modifier.size(16.dp))
+                                            Spacer(Modifier.width(8.dp))
+                                            Text(
+                                                file.name,
+                                                fontSize = 11.sp,
+                                                color = AppTheme.TextPrimary,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                                modifier = Modifier.weight(1f)
+                                            )
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(
+                                                formatFileSize(file.size),
+                                                fontSize = 10.sp,
+                                                color = AppTheme.TextMuted,
+                                                fontFamily = FontFamily.Monospace
+                                            )
+                                            Spacer(Modifier.width(8.dp))
+                                            IconButton(
+                                                onClick = {
+                                                    selectedFiles = selectedFiles.toMutableList().also { it.removeAt(idx) }
+                                                },
+                                                modifier = Modifier.size(18.dp)
+                                            ) {
+                                                Icon(Icons.Rounded.Close, contentDescription = "Remove", tint = Color(0xFF94A3B8), modifier = Modifier.size(14.dp))
+                                            }
+                                        }
                                     }
-                                }
-
-                                Spacer(Modifier.height(14.dp))
-
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Icon(Icons.Rounded.FolderOpen, contentDescription = null, tint = Color(0xFFF59E0B), modifier = Modifier.size(16.dp))
-                                    Spacer(Modifier.width(6.dp))
-                                    Text("Saves in: Downloads/RemotePC", fontSize = 11.sp, color = AppTheme.TextMuted)
-                                }
-
-                                Spacer(Modifier.height(14.dp))
-
-                                Button(
-                                    onClick = {
-                                        showAirPulseQrScanner = true
-                                    },
-                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
-                                    shape = RoundedCornerShape(12.dp),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    Icon(Icons.Rounded.QrCodeScanner, contentDescription = null, tint = Color(0xFF0B0F19), modifier = Modifier.size(18.dp))
-                                    Spacer(Modifier.width(8.dp))
-                                    Text("Scan Sender QR to Connect", fontWeight = FontWeight.Bold, color = Color(0xFF0B0F19), fontSize = 13.sp)
+                                    if (selectedFiles.size > 4) {
+                                        Text(
+                                            "+ ${selectedFiles.size - 4} more files...",
+                                            fontSize = 10.sp,
+                                            color = AppTheme.TextMuted,
+                                            modifier = Modifier.padding(start = 4.dp, top = 2.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
 
-            // =================================================================
-            // SENDER MODE (Select files, radar list, PIN, beam)
-            // =================================================================
-            if (activeMode == "send") {
-                LazyColumn(modifier = Modifier.fillMaxSize()) {
-                    // File Selection Box
+                // =================================================================
+                // 4. NEARBY DEVICES (1-Tap Share Nodes)
+                // =================================================================
+                item {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "Nearby Devices",
+                                fontWeight = FontWeight.Bold,
+                                color = AppTheme.TextPrimary,
+                                fontSize = 14.sp
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(Color(0xFF06B6D4).copy(alpha = 0.2f))
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    "${discoveredPeers.size} Found",
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = Color(0xFF06B6D4)
+                                )
+                            }
+                        }
+
+                        if (isScanningPeers) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = Color(0xFF06B6D4)
+                            )
+                        }
+                    }
+                }
+
+                if (discoveredPeers.isEmpty()) {
                     item {
                         Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { filePickerLauncher.launch(arrayOf("*/*")) },
-                            shape = RoundedCornerShape(20.dp),
-                            colors = CardDefaults.cardColors(containerColor = AppTheme.CardDarkElevated),
-                            border = BorderStroke(1.dp, Color(0xFF06B6D4).copy(alpha = 0.4f))
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = AppTheme.CardDarkElevated.copy(alpha = 0.6f)),
+                            border = BorderStroke(1.dp, AppTheme.CardBorderSubtle)
                         ) {
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(20.dp),
+                                    .padding(24.dp),
                                 horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Icon(
+                                    Icons.Rounded.WifiTethering,
+                                    contentDescription = null,
+                                    tint = AppTheme.TextMuted,
+                                    modifier = Modifier.size(36.dp)
+                                )
+                                Spacer(Modifier.height(10.dp))
+                                Text(
+                                    "Looking for nearby devices...",
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = AppTheme.TextPrimary,
+                                    fontSize = 13.sp
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Text(
+                                    "Open AirPulse on your Ubuntu PC or another phone on the same Wi-Fi network to beam instantly.",
+                                    fontSize = 11.sp,
+                                    color = AppTheme.TextMuted,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    items(discoveredPeers) { peer ->
+                        val isWin = peer.os == "windows"
+                        val isLinux = peer.os == "linux"
+                        val isMac = peer.os == "macos"
+                        val isDesktop = isWin || isLinux || isMac
+                        Card(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    sendFilesToTarget(peer)
+                                },
+                            shape = RoundedCornerShape(16.dp),
+                            colors = CardDefaults.cardColors(containerColor = AppTheme.CardDarkElevated),
+                            border = BorderStroke(1.dp, Color(0xFF06B6D4).copy(alpha = 0.25f))
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(14.dp),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Box(
                                     modifier = Modifier
                                         .size(46.dp)
-                                        .clip(CircleShape)
-                                        .background(Color(0xFF06B6D4).copy(alpha = 0.15f)),
+                                        .clip(RoundedCornerShape(14.dp))
+                                        .background(if (isDesktop) Color(0xFF06B6D4).copy(alpha = 0.2f) else Color(0xFF10B981).copy(alpha = 0.2f)),
                                     contentAlignment = Alignment.Center
                                 ) {
-                                    Icon(Icons.Rounded.Add, contentDescription = null, tint = Color(0xFF06B6D4), modifier = Modifier.size(24.dp))
+                                    Icon(
+                                        if (isDesktop) Icons.Rounded.Laptop else Icons.Rounded.Smartphone,
+                                        contentDescription = null,
+                                        tint = if (isDesktop) Color(0xFF06B6D4) else Color(0xFF10B981),
+                                        modifier = Modifier.size(24.dp)
+                                    )
                                 }
-                                Spacer(Modifier.height(10.dp))
-                                Text(
-                                    if (selectedFiles.isEmpty()) "Tap to Select Files to Beam" else "Add More Files",
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 14.sp,
-                                    color = AppTheme.TextPrimary
-                                )
-                                Text("Photos, 4K videos, documents, APKs", fontSize = 11.sp, color = AppTheme.TextMuted)
-                            }
-                        }
-                    }
-
-                    // Selected Files Queue
-                    if (selectedFiles.isNotEmpty()) {
-                        item {
-                            Spacer(Modifier.height(10.dp))
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Text(
-                                    "QUEUED FILES (${selectedFiles.size} • ${formatFileSize(selectedFiles.sumOf { it.size })})",
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = AppTheme.TextMuted,
-                                    letterSpacing = 1.sp
-                                )
-                                TextButton(onClick = { selectedFiles = emptyList() }) {
-                                    Text("Clear All", fontSize = 11.sp, color = Color(0xFFF43F5E))
-                                }
-                            }
-                        }
-
-                        items(selectedFiles) { file ->
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 2.dp),
-                                shape = RoundedCornerShape(12.dp),
-                                colors = CardDefaults.cardColors(containerColor = AppTheme.CardDark)
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(10.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(Icons.Rounded.Description, contentDescription = null, tint = Color(0xFF06B6D4), modifier = Modifier.size(20.dp))
-                                    Spacer(Modifier.width(8.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(file.name, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = AppTheme.TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        Text(formatFileSize(file.size), fontSize = 10.sp, color = AppTheme.TextMuted)
-                                    }
-                                    IconButton(
-                                        onClick = { selectedFiles = selectedFiles.filter { it.uri != file.uri } },
-                                        modifier = Modifier.size(28.dp)
-                                    ) {
-                                        Icon(Icons.Rounded.Close, contentDescription = "Remove", tint = AppTheme.TextMuted, modifier = Modifier.size(16.dp))
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Nearby Devices Radar List
-                    item {
-                        Spacer(Modifier.height(14.dp))
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                "NEARBY AIRPULSE RECEIVERS",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = AppTheme.TextMuted,
-                                letterSpacing = 1.sp
-                            )
-                            Row {
-                                TextButton(onClick = {
-                                    generateSenderQrCode()
-                                    showSenderQrDialog = true
-                                }) {
-                                    Icon(Icons.Rounded.QrCode, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color(0xFF06B6D4))
-                                    Spacer(Modifier.width(4.dp))
-                                    Text("Show QR", fontSize = 11.sp, color = Color(0xFF06B6D4), fontWeight = FontWeight.Bold)
-                                }
-                                TextButton(onClick = {
-                                    targetPeerForPin = null
-                                    showPinDialog = true
-                                }) {
-                                    Icon(Icons.Rounded.Lock, contentDescription = null, modifier = Modifier.size(14.dp), tint = Color(0xFF06B6D4))
-                                    Spacer(Modifier.width(4.dp))
-                                    Text("Enter IP", fontSize = 11.sp, color = Color(0xFF06B6D4), fontWeight = FontWeight.Bold)
-                                }
-                                IconButton(onClick = { scanPeers() }, modifier = Modifier.size(32.dp)) {
-                                    Icon(Icons.Rounded.Refresh, contentDescription = "Scan", tint = Color(0xFF06B6D4), modifier = Modifier.size(18.dp))
-                                }
-                            }
-                        }
-                    }
-
-                    if (discoveredPeers.isEmpty()) {
-                        item {
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 6.dp),
-                                shape = RoundedCornerShape(16.dp),
-                                colors = CardDefaults.cardColors(containerColor = AppTheme.CardDarkElevated)
-                            ) {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(24.dp),
-                                    horizontalAlignment = Alignment.CenterHorizontally
-                                ) {
-                                    Icon(Icons.Rounded.Sensors, contentDescription = null, tint = Color(0xFF64748B), modifier = Modifier.size(36.dp))
-                                    Spacer(Modifier.height(8.dp))
-                                    Text("Searching for Devices...", fontWeight = FontWeight.Bold, color = AppTheme.TextPrimary, fontSize = 13.sp)
-                                    Text("Make sure the target PC or phone is in Receiver Mode", fontSize = 11.sp, color = AppTheme.TextMuted, textAlign = TextAlign.Center)
-                                    Spacer(Modifier.height(12.dp))
-                                    Button(
-                                        onClick = {
-                                            targetPeerForPin = null
-                                            showPinDialog = true
-                                        },
-                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF06B6D4)),
-                                        shape = RoundedCornerShape(10.dp)
-                                    ) {
-                                        Icon(Icons.Rounded.Lock, contentDescription = null, tint = Color(0xFF0B0F19), modifier = Modifier.size(15.dp))
+                                Spacer(Modifier.width(12.dp))
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(peer.name, fontWeight = FontWeight.Bold, color = AppTheme.TextPrimary, fontSize = 14.sp)
+                                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 2.dp)) {
+                                        Text(peer.ip, fontSize = 11.sp, color = AppTheme.TextMuted, fontFamily = FontFamily.Monospace)
                                         Spacer(Modifier.width(6.dp))
-                                        Text("Connect by IP address", color = Color(0xFF0B0F19), fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                                    }
-                                }
-                            }
-                        }
-                    } else {
-                        items(discoveredPeers) { peer ->
-                            val isWin = peer.os == "windows"
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 4.dp),
-                                shape = RoundedCornerShape(16.dp),
-                                colors = CardDefaults.cardColors(containerColor = AppTheme.CardDarkElevated),
-                                border = if (peer.receiveMode) BorderStroke(1.5.dp, Color(0xFF10B981)) else BorderStroke(1.dp, AppTheme.CardBorderSubtle)
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(14.dp),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(40.dp)
-                                            .clip(RoundedCornerShape(12.dp))
-                                            .background(if (isWin) Color(0xFF06B6D4).copy(alpha = 0.2f) else Color(0xFF10B981).copy(alpha = 0.2f)),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            if (isWin) Icons.Rounded.Laptop else Icons.Rounded.Smartphone,
-                                            contentDescription = null,
-                                            tint = if (isWin) Color(0xFF06B6D4) else Color(0xFF10B981),
-                                            modifier = Modifier.size(22.dp)
-                                        )
-                                    }
-                                    Spacer(Modifier.width(12.dp))
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(peer.name, fontWeight = FontWeight.Bold, color = AppTheme.TextPrimary, fontSize = 13.sp)
-                                        Row(verticalAlignment = Alignment.CenterVertically) {
-                                            Text(peer.ip, fontSize = 11.sp, color = AppTheme.TextMuted, fontFamily = FontFamily.Monospace)
-                                            if (peer.receiveMode) {
-                                                Spacer(Modifier.width(6.dp))
-                                                Box(
-                                                    modifier = Modifier
-                                                        .clip(RoundedCornerShape(4.dp))
-                                                        .background(Color(0xFF10B981).copy(alpha = 0.2f))
-                                                        .padding(horizontal = 4.dp, vertical = 1.dp)
-                                                ) {
-                                                    Text("RADAR READY", fontSize = 9.sp, fontWeight = FontWeight.Black, color = Color(0xFF10B981))
-                                                }
-                                            }
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(Color(0xFF10B981).copy(alpha = 0.2f))
+                                                .padding(horizontal = 4.dp, vertical = 1.dp)
+                                        ) {
+                                            Text("QUICK SHARE", fontSize = 8.sp, fontWeight = FontWeight.Black, color = Color(0xFF10B981))
                                         }
                                     }
+                                }
 
-                                    Button(
-                                        onClick = { sendFilesToTarget(peer) },
-                                        enabled = selectedFiles.isNotEmpty(),
-                                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF06B6D4)),
-                                        shape = RoundedCornerShape(10.dp),
-                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
-                                    ) {
-                                        Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = null, tint = Color(0xFF0B0F19), modifier = Modifier.size(14.dp))
-                                        Spacer(Modifier.width(4.dp))
-                                        Text("Beam", color = Color(0xFF0B0F19), fontWeight = FontWeight.Bold, fontSize = 11.sp)
-                                    }
+                                Button(
+                                    onClick = { sendFilesToTarget(peer) },
+                                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF06B6D4)),
+                                    shape = RoundedCornerShape(12.dp),
+                                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+                                ) {
+                                    Icon(Icons.AutoMirrored.Rounded.Send, contentDescription = null, tint = Color(0xFF0B0F19), modifier = Modifier.size(14.dp))
+                                    Spacer(Modifier.width(4.dp))
+                                    Text(
+                                        if (selectedFiles.isEmpty()) "Tap to Pick" else "Beam",
+                                        color = Color(0xFF0B0F19),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 11.sp
+                                    )
                                 }
                             }
                         }
@@ -1394,6 +1390,69 @@ fun AirPulseScreen(
                 }
             }
         }
+    }
+
+    if (showReceiveQrDialog) {
+        AlertDialog(
+            onDismissRequest = { showReceiveQrDialog = false },
+            containerColor = AppTheme.CardDarkElevated,
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Rounded.QrCode, contentDescription = null, tint = Color(0xFF10B981), modifier = Modifier.size(24.dp))
+                    Spacer(Modifier.width(8.dp))
+                    Text("Quick Share QR Code", color = AppTheme.TextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                }
+            },
+            text = {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        "Scan this QR code from any phone or PC on your Wi-Fi network to beam files directly.",
+                        fontSize = 12.sp,
+                        color = AppTheme.TextMuted,
+                        textAlign = TextAlign.Center
+                    )
+                    Spacer(Modifier.height(14.dp))
+                    Box(
+                        modifier = Modifier
+                            .size(220.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(Color.White)
+                            .padding(10.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (qrBitmap != null) {
+                            Image(
+                                bitmap = qrBitmap!!,
+                                contentDescription = "Receiver QR",
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            CircularProgressIndicator(color = Color(0xFF10B981))
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        "${Build.MODEL} • ${getLocalIp()}:5056",
+                        fontSize = 11.sp,
+                        color = Color(0xFF10B981),
+                        fontFamily = FontFamily.Monospace,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { showReceiveQrDialog = false },
+                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF10B981)),
+                    shape = RoundedCornerShape(10.dp)
+                ) {
+                    Text("Done", color = Color(0xFF0B0F19), fontWeight = FontWeight.Bold)
+                }
+            }
+        )
     }
 
     if (showSenderQrDialog) {

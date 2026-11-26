@@ -48,7 +48,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       title: 'COMPUTER & STATUS',
       items: [
         { key: 'server', label: 'Status & Pairing', icon: Server, badge: pendingPairingsCount > 0 ? `${pendingPairingsCount}` : null },
-        { key: 'airpulse', label: 'AirPulse Drop', icon: Radio, badge: 'P2P', highlight: true },
+        { key: 'airpulse', label: 'AirPulse Quick Share', icon: Radio, badge: 'P2P', highlight: true },
       ]
     },
     {

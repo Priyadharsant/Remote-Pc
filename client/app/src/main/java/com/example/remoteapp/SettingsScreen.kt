@@ -28,7 +28,9 @@ fun SettingsScreen(
     onBack: () -> Unit,
     onNavigateDiscovery: () -> Unit,
     onRequestBatteryOptimization: () -> Unit,
-    onResetSetup: () -> Unit
+    onResetSetup: () -> Unit,
+    isMasterPower: Boolean = true,
+    onToggleMasterPower: (Boolean) -> Unit = {}
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("RemoteAppPrefs", Context.MODE_PRIVATE) }
@@ -81,6 +83,13 @@ fun SettingsScreen(
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
+            // SECTION: SESSION & BACKGROUND SERVICE
+            Text("SESSION & POWER", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AppTheme.AccentCyan, letterSpacing = 1.sp)
+            MasterPowerCard(
+                isEnabled = isMasterPower,
+                onToggle = onToggleMasterPower
+            )
+
             // SECTION 1: DEVICE & SECURITY
             Text("DEVICE & SECURITY", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = AppTheme.AccentCyan, letterSpacing = 1.sp)
 
