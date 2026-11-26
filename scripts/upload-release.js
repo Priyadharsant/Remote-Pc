@@ -233,33 +233,35 @@ async function main() {
   const isApkOnly = process.argv.includes("--apk-only");
 
   const exePath = path.join(ROOT_DIR, "Remote_PC_Setup.exe");
+  const portableExePath = path.join(ROOT_DIR, `Remote_PC_GUI_${version}.exe`);
   const apkPath = path.join(ROOT_DIR, "Remote.PC.apk");
   const debPath = path.join(ROOT_DIR, "Remote_PC_Ubuntu_amd64.deb");
   const tarPath = path.join(ROOT_DIR, "Remote_PC_Linux_x86_64.tar.gz");
+  const serverPath = path.join(ROOT_DIR, "Remote_Server");
 
-  if (!isApkOnly && !fs.existsSync(exePath)) {
-    if (isExeOnly) {
-      throw new Error(`Executable installer not found at ${exePath}. Run 'npm run build:exe' first!`);
-    }
+  // Always sync latest built APK if available
+  const clientApk = path.join(ROOT_DIR, "client", "app", "build", "outputs", "apk", "debug", "app-debug.apk");
+  if (fs.existsSync(clientApk)) {
+    fs.copyFileSync(clientApk, apkPath);
+    fs.copyFileSync(clientApk, path.join(ROOT_DIR, "Remote PC.apk"));
+    console.log(`📱 Synced latest Android APK from ${clientApk}`);
   }
 
-  if (!isExeOnly && !fs.existsSync(apkPath)) {
-    const spaceApk = path.join(ROOT_DIR, "Remote PC.apk");
-    const clientApk = path.join(ROOT_DIR, "client", "app", "build", "outputs", "apk", "debug", "app-debug.apk");
-    if (fs.existsSync(spaceApk)) {
-      fs.copyFileSync(spaceApk, apkPath);
-    } else if (fs.existsSync(clientApk)) {
-      fs.copyFileSync(clientApk, apkPath);
-    } else if (isApkOnly) {
-      throw new Error(`Android APK not found at ${apkPath}. Run 'npm run build:apk' first!`);
+  // If portable Windows GUI exists but Setup doesn't or is older, ensure Setup.exe is available
+  if (fs.existsSync(portableExePath)) {
+    if (!fs.existsSync(exePath) || fs.statSync(portableExePath).mtimeMs > fs.statSync(exePath).mtimeMs) {
+      fs.copyFileSync(portableExePath, exePath);
+      console.log(`🖥️  Synced Windows executable to ${exePath}`);
     }
   }
 
   const isLinux = process.argv.includes("--linux");
   const hasExe = !isApkOnly && fs.existsSync(exePath);
+  const hasPortableExe = !isApkOnly && fs.existsSync(portableExePath);
   const hasApk = !isExeOnly && fs.existsSync(apkPath);
   const hasDeb = !isExeOnly && !isApkOnly && fs.existsSync(debPath);
   const hasTar = !isExeOnly && !isApkOnly && fs.existsSync(tarPath);
+  const hasServer = !isExeOnly && !isApkOnly && fs.existsSync(serverPath);
 
   if (!hasExe && !hasApk && !hasDeb && !hasTar) {
     throw new Error("No release binaries found.");
@@ -316,6 +318,11 @@ async function main() {
     hasExe && {
       localPath: exePath,
       name: "Remote_PC_Setup.exe",
+      contentType: "application/vnd.microsoft.portable-executable",
+    },
+    hasPortableExe && {
+      localPath: portableExePath,
+      name: `Remote_PC_GUI_${version}.exe`,
       contentType: "application/vnd.microsoft.portable-executable",
     },
     hasApk && {
